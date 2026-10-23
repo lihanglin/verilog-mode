@@ -7,25 +7,35 @@
 # 
 ######################################################################
 # Common targets:
-#   make             # Compile source for GNU and Xemacs
-#   make emacs       # Compile source for GNU only (no Xemacs)
-#   make test        # Run self tests for GNU and Xemacs
-#   make test_emacs  # Run self tests for GNU only (no Xemacs)
-#   # See x/verilog-mode.el for version to install
+#   make             # Compile C++17 Tree-Sitter module and GNU Emacs elisp
+#   make emacs       # Compile source for GNU Emacs
+#   make test        # Run self tests for GNU Emacs and Tree-Sitter
+#   make test_emacs  # Run golden self tests for GNU Emacs
+#   make test_ts     # Run Tree-Sitter ERT self tests
 ######################################################################
 
 # the directory where the .elc files will be installed
-XEMACS  ?= xemacs
-XEMACS_DEST = /usr/local/lib/xemacs/xemacs-packages/lisp/prog-modes/
+ifneq ($(wildcard $(abspath ../opt/bin/emacs-26.1)),)
+EMACS   ?= $(abspath ../opt/bin/emacs-26.1)
+else
 EMACS   ?= emacs
+endif
 EMACS_DEST = /usr/share/emacs/site-lisp/
 ELC	= -batch -q -f batch-byte-compile
 MAKECHANGELOG = perl makechangelog
-export XEMACS
 export EMACS
 
-default : e/verilog-mode.elc x/verilog-mode.elc
-emacs : e/verilog-mode.elc
+default : src/verilog-ts-core.so e/verilog-mode.elc
+emacs : src/verilog-ts-core.so e/verilog-mode.elc
+compile : src/verilog-ts-core.so e/verilog-mode.elc
+
+.PHONY: ts_module test_ts
+ts_module: src/verilog-ts-core.so
+src/verilog-ts-core.so: $(wildcard src/*.cpp src/*.hpp src/Makefile)
+	$(MAKE) -C src all
+
+test_ts: src/verilog-ts-core.so e/verilog-mode.elc
+	$(EMACS) --batch -Q -l ../phase1_exp/test-ts.el -f ert-run-tests-batch-and-exit
 
 release : .timestamps
 install : .timestamps
@@ -36,13 +46,13 @@ install : .timestamps
 	@mkdir -p $@
 
 test:	.timestamps/test
-.timestamps/test: x/verilog-mode.elc e/verilog-mode.elc verilog.info 0test.el .timestamps
+.timestamps/test: src/verilog-ts-core.so e/verilog-mode.elc verilog.info 0test.el .timestamps
 ifeq ($(VERILOG_MODE_TEST_FILE),)
-	$(MAKE) test_batch test_errors test_emacs test_xemacs
+	$(MAKE) test_ts test_batch test_errors test_emacs
 	@touch $@
 	@echo ======= ALL TESTS PASSED
 else
-	$(MAKE) test_emacs test_xemacs
+	$(MAKE) test_emacs
 endif
 
 #Usage: $(call test-emacs_sub,label,threading)
@@ -63,24 +73,6 @@ $(eval $(call test_emacs_sub,test_emacs_4,4of5))
 $(eval $(call test_emacs_sub,test_emacs_5,5of5))
 endif
 
-#Usage: $(call test_xemacs_sub,label,threading)
-define test_xemacs_sub
-test_xemacs:: $(1)
-$(1): x/verilog-mode.elc
-	@echo
-	@echo == $(1)
-	@mkdir -p x/t
-	VERILOG_MODE_THREAD=$(2) time $(XEMACS)  --batch -vanilla -l x/verilog-mode.elc -l 0test.el
-endef
-
-$(eval $(call test_xemacs_sub,test_xemacs_1,1of5))
-ifeq ($(VERILOG_MODE_TEST_FILE),)
-$(eval $(call test_xemacs_sub,test_xemacs_2,2of5))
-$(eval $(call test_xemacs_sub,test_xemacs_3,3of5))
-$(eval $(call test_xemacs_sub,test_xemacs_4,4of5))
-$(eval $(call test_xemacs_sub,test_xemacs_5,5of5))
-endif
-
 test_errors:
 	@echo
 	@echo == test_errors
@@ -94,9 +86,6 @@ test_batch: e/verilog-mode.elc
 
 local:	.timestamps/local
 .timestamps/local:  verilog-mode.el
-	cp verilog-mode.el $(XEMACS_DEST)verilog-mode.el
-	rm -f $(XEMACS_DEST)verilog-mode.elc
-	$(XEMACS) $(ELC) $(XEMACS_DEST)verilog-mode.el
 	cp verilog-mode.el $(EMACS_DEST)verilog-mode.el
 	rm -f $(EMACS_DEST)verilog-mode.elc
 	$(EMACS) $(ELC) $(EMACS_DEST)verilog-mode.el
@@ -110,11 +99,6 @@ endif
 ChangeLog : verilog-mode.el makechangelog
 	$(MAKECHANGELOG) --git verilog-mode.el > $@
 
-x/verilog-mode.el : verilog-mode.el ./config_rev.pl
-	rm -rf x
-	mkdir x
-	./config_rev.pl . . <verilog-mode.el >x/verilog-mode.el
-
 e/verilog-mode.el : verilog-mode.el ./config_rev.pl
 	-rm -rf e
 	-mkdir e
@@ -123,10 +107,7 @@ e/verilog-mode.el : verilog-mode.el ./config_rev.pl
 e/verilog-mode.el.gz : e/verilog-mode.el
 	gzip --best $< --stdout > $@
 
-x/verilog-mode.elc : x/verilog-mode.el
-	$(XEMACS) $(ELC) x/verilog-mode.el
-
-e/verilog-mode.elc : e/verilog-mode.el
+e/verilog-mode.elc : e/verilog-mode.el src/verilog-ts-core.so
 	$(EMACS) $(ELC) e/verilog-mode.el
 
 verilog.info : verilog.texinfo

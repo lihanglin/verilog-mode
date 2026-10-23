@@ -138,8 +138,7 @@
 
     (while files
       (setq file (car files))
-      (setq temp-file (concat (if running-on-xemacs "x/t/" "e/t/")
-			      file))
+      (setq temp-file (concat "e/t/" file))
       (cond ((equal "." file))
             ((equal ".." file))
             ((string-match "#" file))  ;; Backups
@@ -151,20 +150,8 @@
 		    (not (vl-do-on-thread file-num))))
             (t
              (message (concat "Considering test " file ))
-             (if running-on-xemacs
-                 (progn
-                   (setq cf (concat "skip_for_xemacs/" file))
-                   (if (file-exists-p cf ) ;
-                       (message (concat "Skipping testing " file " on Xemacs because file " cf "exists"))
-                     (progn
-		       (verilog-test-file file temp-file)
-                       (setq tests-run (1+ tests-run))
-                       )
-                     ))
-               (progn
-		 (verilog-test-file file temp-file)
-                 (setq tests-run (1+ tests-run))
-                 ))
+             (verilog-test-file file temp-file)
+             (setq tests-run (1+ tests-run))
 	     (message (format " %d tests run so far, %d left... %s"
 			      tests-run (length files)
 			      (if vl-threading (concat "Thread " vl-threading) "")))
@@ -195,8 +182,6 @@
 
   ;; Setup
   (require `compile)
-  (defun ask-user-about-lock() nil)  ;; XEmacs - Disable lock conflicts
-  (setq running-on-xemacs (string-match "XEmacs" emacs-version))
   (setq make-backup-files nil)
   (setq-default make-backup-files nil)
   (setq diff-flags (if (getenv "VERILOG_MODE_NO_INDENTS") "-wBu" "-u"))
@@ -205,8 +190,6 @@
   (setq enable-local-eval t)
   (setq auto-mode-alist (cons  '("\\.v\\'" . verilog-mode) auto-mode-alist))
   (setq-default fill-column 100)
-  (if running-on-xemacs
-      (setq again "make test_xemacs")
-    (setq again "make test_emacs"))
+  (setq again "make test_emacs")
   (verilog-test)
 )
