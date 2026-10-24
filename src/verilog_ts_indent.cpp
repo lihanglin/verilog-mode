@@ -504,6 +504,9 @@ bool parse_ansi_port_row(const BufferState &bs, TSNode pnode, AlignRow &row) {
 
   TSNode name_node = ts_node_child_by_field_name(pnode, "port_name", 9);
   if (ts_node_is_null(name_node)) {
+    name_node = ts_node_child_by_field_name(pnode, "name", 4);
+  }
+  if (ts_node_is_null(name_node)) {
     uint32_t count = ts_node_child_count(pnode);
     for (uint32_t i = count; i > 0; --i) {
       TSNode ch = ts_node_child(pnode, i - 1);
@@ -818,14 +821,15 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
   for (TSNode walk = cur; !ts_node_is_null(walk); walk = ts_node_parent(walk)) {
     std::string_view nt = ts_node_type(walk);
 
-    // 1.1 ANSI Port List Tabular Alignment
-    if (nt == "list_of_port_declarations") {
+    // 1.1 ANSI Port List Tabular Alignment (module/interface/program & function/task)
+    if (nt == "list_of_port_declarations" || nt == "tf_port_list") {
       std::vector<AlignRow> rows;
       uint32_t count = ts_node_child_count(walk);
       for (uint32_t i = 0; i < count; ++i) {
         TSNode ch = ts_node_child(walk, i);
         std::string_view ct = ts_node_type(ch);
-        if (ct == "ansi_port_declaration" || ct == "port_declaration") {
+        if (ct == "ansi_port_declaration" || ct == "port_declaration" ||
+            ct == "tf_port_item") {
           AlignRow row;
           if (!parse_ansi_port_row(bs, ch, row)) return elisp_nil(env);
           rows.push_back(std::move(row));
@@ -847,7 +851,9 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
       uint32_t base_col =
           compute_block_base_col(header_col, first_col, indent_level);
       uint32_t close_b =
-          ts_node_end_byte(walk) > 0 ? ts_node_end_byte(walk) - 1 : 0;
+          (nt == "tf_port_list")
+              ? forward_syntactic_ws_bytes(bs, ts_node_end_byte(walk), n, false)
+              : (ts_node_end_byte(walk) > 0 ? ts_node_end_byte(walk) - 1 : 0);
       auto closing_line = make_closing_line_edit(bs, close_b, header_col, ')');
       return format_align_rows(env, bs, rows, base_col, false, true, align_dim,
                                align_sub_dim, closing_line);
