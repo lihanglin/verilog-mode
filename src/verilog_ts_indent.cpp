@@ -782,8 +782,17 @@ make_closing_line_edit(const BufferState &bs, uint32_t close_b,
     ++c_nb;
   }
   if (c_nb != close_b) return std::nullopt;
-  std::string line =
-      std::string(header_col, ' ') + trim_ws_indent(bs.slice(c_nb, c_eb));
+  uint32_t after_b = c_nb + 1;
+  while (after_b < c_eb &&
+         (bs.text[after_b] == ' ' || bs.text[after_b] == '\t')) {
+    ++after_b;
+  }
+  std::string line(header_col, ' ');
+  line.push_back(expected_char);
+  if (after_b < c_eb) {
+    if (after_b > c_nb + 1) line.push_back(' ');
+    line += trim_ws_indent(bs.slice(after_b, c_eb));
+  }
   return std::make_tuple(c_sb, c_eb, std::move(line));
 }
 
@@ -828,6 +837,9 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
   if (bs.text[first_nb] == ')') {
     uint32_t prev = backward_syntactic_ws_bytes(bs, first_nb, 0, false);
     if (prev > 0) probe_b = prev - 1;
+  } else if (bs.text[first_nb] == '(') {
+    uint32_t next = forward_syntactic_ws_bytes(bs, first_nb + 1, n, false);
+    if (next < n) probe_b = next;
   }
   TSNode cur = ts_node_descendant_for_byte_range(root, probe_b, probe_b);
 
@@ -836,6 +848,21 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
 
     // 1.1 ANSI Port List Tabular Alignment (module/interface/program & function/task)
     if (nt == "list_of_port_declarations" || nt == "tf_port_list") {
+      uint32_t open_b = n;
+      if (nt == "list_of_port_declarations") {
+        open_b = ts_node_start_byte(walk);
+      } else {
+        uint32_t prev =
+            backward_syntactic_ws_bytes(bs, ts_node_start_byte(walk), 0, false);
+        if (prev > 0 && bs.text[prev - 1] == '(') open_b = prev - 1;
+      }
+      if (bs.text[first_nb] == '(' && first_nb != open_b) return elisp_nil(env);
+      TSNode port_parent = ts_node_parent(walk);
+      uint32_t port_hdr_b = !ts_node_is_null(port_parent)
+                                ? ts_node_start_byte(port_parent)
+                                : ts_node_start_byte(walk);
+      uint32_t header_sb = bs.line_start_byte(port_hdr_b);
+      if (ls == header_sb) return elisp_nil(env);
       std::vector<AlignRow> rows;
       uint32_t count = ts_node_child_count(walk);
       for (uint32_t i = 0; i < count; ++i) {
@@ -849,11 +876,6 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
         }
       }
       if (rows.empty()) return elisp_nil(env);
-      TSNode port_parent = ts_node_parent(walk);
-      uint32_t port_hdr_b = !ts_node_is_null(port_parent)
-                                ? ts_node_start_byte(port_parent)
-                                : ts_node_start_byte(walk);
-      uint32_t header_sb = bs.line_start_byte(port_hdr_b);
       uint32_t header_nb = header_sb;
       while (header_nb < n &&
              (bs.text[header_nb] == ' ' || bs.text[header_nb] == '\t')) {
@@ -863,13 +885,16 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
       uint32_t first_col = bs.byte_to_column(rows.front().first_nb);
       uint32_t base_col =
           compute_block_base_col(header_col, first_col, indent_level);
+      auto opening_line =
+          (open_b < n) ? make_closing_line_edit(bs, open_b, header_col, '(')
+                       : std::nullopt;
       uint32_t close_b =
           (nt == "tf_port_list")
               ? forward_syntactic_ws_bytes(bs, ts_node_end_byte(walk), n, false)
               : (ts_node_end_byte(walk) > 0 ? ts_node_end_byte(walk) - 1 : 0);
       auto closing_line = make_closing_line_edit(bs, close_b, header_col, ')');
       return format_align_rows(env, bs, rows, base_col, false, true, align_dim,
-                               align_sub_dim, closing_line);
+                               align_sub_dim, closing_line, opening_line);
     }
 
     // 1.2 Packed Struct and Union Member Alignment
@@ -900,6 +925,8 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
           }
         }
         if (has_struct_union) {
+          uint32_t header_sb = bs.line_start_byte(ts_node_start_byte(dtype));
+          if (ls == header_sb) return elisp_nil(env);
           std::vector<AlignRow> rows;
           for (uint32_t i = 0; i < count; ++i) {
             TSNode ch = ts_node_child(dtype, i);
@@ -910,7 +937,6 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
             }
           }
           if (rows.empty()) return elisp_nil(env);
-          uint32_t header_sb = bs.line_start_byte(ts_node_start_byte(dtype));
           uint32_t header_nb = header_sb;
           while (header_nb < n &&
                  (bs.text[header_nb] == ' ' || bs.text[header_nb] == '\t')) {
@@ -938,6 +964,11 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
     // 1.3 Module Instantiation Port Connection Alignment
     if (nt == "list_of_port_connections" ||
         nt == "list_of_checker_port_connections") {
+      uint32_t prev_b =
+          backward_syntactic_ws_bytes(bs, ts_node_start_byte(walk), 0, false);
+      uint32_t open_b =
+          (prev_b > 0 && bs.text[prev_b - 1] == '(') ? (prev_b - 1) : n;
+      if (bs.text[first_nb] == '(' && first_nb != open_b) return elisp_nil(env);
       TSNode inst_parent = ts_node_parent(walk);
       TSNode inst_outer =
           (!ts_node_is_null(inst_parent) &&
@@ -950,6 +981,11 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
           std::string_view::npos) {
         return elisp_nil(env);
       }
+      uint32_t container_sb = !ts_node_is_null(inst_outer)
+                                  ? ts_node_start_byte(inst_outer)
+                                  : ts_node_start_byte(walk);
+      uint32_t header_sb = bs.line_start_byte(container_sb);
+      if (ls == header_sb) return elisp_nil(env);
       std::vector<AlignRow> rows;
       uint32_t count = ts_node_child_count(walk);
       for (uint32_t i = 0; i < count; ++i) {
@@ -963,10 +999,6 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
         }
       }
       if (rows.empty()) return elisp_nil(env);
-      uint32_t container_sb = !ts_node_is_null(inst_outer)
-                                  ? ts_node_start_byte(inst_outer)
-                                  : ts_node_start_byte(walk);
-      uint32_t header_sb = bs.line_start_byte(container_sb);
       uint32_t header_nb = header_sb;
       while (header_nb < n &&
              (bs.text[header_nb] == ' ' || bs.text[header_nb] == '\t')) {
@@ -976,11 +1008,14 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
       uint32_t first_col = bs.byte_to_column(rows.front().first_nb);
       uint32_t base_col =
           compute_block_base_col(header_col, first_col, indent_level);
+      auto opening_line =
+          (open_b < n) ? make_closing_line_edit(bs, open_b, header_col, '(')
+                       : std::nullopt;
       uint32_t close_b =
           forward_syntactic_ws_bytes(bs, ts_node_end_byte(walk), n, false);
       auto closing_line = make_closing_line_edit(bs, close_b, header_col, ')');
       return format_align_rows(env, bs, rows, base_col, true, false, align_dim,
-                               align_sub_dim, closing_line);
+                               align_sub_dim, closing_line, opening_line);
     }
   }
 

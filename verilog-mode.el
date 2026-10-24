@@ -5798,6 +5798,14 @@ Return a list of two elements: (INDENT-TYPE INDENT-LEVEL)."
                               (or (not (verilog-in-coverage-p))
                                   (looking-at verilog-in-constraint-re) ))  ; may still get hosed if concat in constraint
                          (let ((sp (point)))
+                           (if (and (eq (char-after starting_position) ?\()
+                                    (save-excursion
+                                      (beginning-of-line)
+                                      (looking-at "^[ \t]*\\(\\(?:virtual[ \t]+\\|protected[ \t]+\\|local[ \t]+\\|extern[ \t]+\\)*\\(?:function\\|task\\)\\|module\\|macromodule\\|interface\\|program\\)\\>")))
+                               (progn
+                                 (beginning-of-line)
+                                 (skip-chars-forward " \t")
+                                 (throw 'nesting 'statement)))
                            (if (and
                                 (not (looking-at verilog-complete-re))
                                 (verilog-continued-line-1 lim))

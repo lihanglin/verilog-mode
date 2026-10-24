@@ -516,7 +516,41 @@
                 "    endfunction\n"
                 "endmodule\n")
         (indent-region (point-min) (point-max) nil)
-        (should (string-match-p "^        logic \\[3:0\\] in_p1;$" (buffer-string)))))))
+        (should (string-match-p "^        logic \\[3:0\\] in_p1;$" (buffer-string)))))
+
+    ;; 1.7 Verify Allman-style packed struct (standalone `{` line) inside class
+    (with-temp-buffer
+      (let ((indent-tabs-mode nil)
+            (verilog-indent-lists nil)
+            (verilog-indent-level 4)
+            (verilog-indent-level-module 4)
+            (verilog-indent-level-declaration 4)
+            (verilog-indent-level-behavioral 4)
+            (verilog-cexp-indent 4)
+            (verilog-case-indent 4)
+            (verilog-align-decl-dimension t)
+            (verilog-align-decl-sub-dimension t)
+            (verilog-auto-lineup-on-semi nil))
+        (verilog-mode)
+        (setq-local indent-tabs-mode nil)
+        (insert "class smu_idu_scoreboard_c extends uvm_scoreboard;\n"
+                "  typedef struct packed\n"
+                "       {\n"
+                "        bit valid;\n"
+                "        bit [WXuopId-1:0] xuopid;\n"
+                "        bit [WZLrnId-1:0] zlrn;\n"
+                "       } zrf_wr_info_t;\n"
+                "endclass\n")
+        (indent-region (point-min) (point-max) nil)
+        (should (equal (buffer-string)
+                       (concat "class smu_idu_scoreboard_c extends uvm_scoreboard;\n"
+                               "    typedef struct packed\n"
+                               "    {\n"
+                               "        bit               valid;\n"
+                               "        bit [WXuopId-1:0] xuopid;\n"
+                               "        bit [WZLrnId-1:0] zlrn;\n"
+                               "    } zrf_wr_info_t;\n"
+                               "endclass\n")))))))
 
 (provide 'test-ts)
 ;;; test-ts.el ends here
