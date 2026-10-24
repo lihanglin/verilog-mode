@@ -5797,11 +5797,17 @@ Return a list of two elements: (INDENT-TYPE INDENT-LEVEL)."
                      (if (and (verilog-continued-line-1 lim)
                               (or (not (verilog-in-coverage-p))
                                   (looking-at verilog-in-constraint-re) ))  ; may still get hosed if concat in constraint
-                         (let ((sp (point)))
-                           (if (and (eq (char-after starting_position) ?\()
+                         (let ((sp (point))
+                               (at-open-paren
+                                (save-excursion
+                                  (goto-char starting_position)
+                                  (looking-at "#?[ \t]*(")))
+                               (decl-hdr-re
+                                "^[ \t]*\\(\\(?:virtual[ \t]+\\|protected[ \t]+\\|local[ \t]+\\|extern[ \t]+\\|pure[ \t]+\\)*\\(?:function\\|task\\|class\\)\\|import[ \t]+\"DPI\\(?:-C\\)?\"[ \t]+\\(?:context[ \t]+\\|pure[ \t]+\\)*\\(?:function\\|task\\)\\|module\\|macromodule\\|interface\\|program\\)\\>"))
+                           (if (and at-open-paren
                                     (save-excursion
                                       (beginning-of-line)
-                                      (looking-at "^[ \t]*\\(\\(?:virtual[ \t]+\\|protected[ \t]+\\|local[ \t]+\\|extern[ \t]+\\)*\\(?:function\\|task\\)\\|module\\|macromodule\\|interface\\|program\\)\\>")))
+                                      (looking-at decl-hdr-re)))
                                (progn
                                  (beginning-of-line)
                                  (skip-chars-forward " \t")
@@ -5809,8 +5815,16 @@ Return a list of two elements: (INDENT-TYPE INDENT-LEVEL)."
                            (if (and
                                 (not (looking-at verilog-complete-re))
                                 (verilog-continued-line-1 lim))
-                               (progn (goto-char sp)
-                                      (throw 'nesting 'cexp))
+                               (if (and at-open-paren
+                                        (save-excursion
+                                          (beginning-of-line)
+                                          (looking-at decl-hdr-re)))
+                                   (progn
+                                     (beginning-of-line)
+                                     (skip-chars-forward " \t")
+                                     (throw 'nesting 'statement))
+                                 (progn (goto-char sp)
+                                        (throw 'nesting 'cexp)))
 
                              (goto-char sp))
                            (if (and (verilog-in-coverage-p)
@@ -5833,7 +5847,23 @@ Return a list of two elements: (INDENT-TYPE INDENT-LEVEL)."
                              (progn
                                (throw 'nesting 'cexp))))
                        ;; not a continued line
-                       (goto-char starting_position))
+                       (progn
+                         (when (and (eq (char-after starting_position) ?\()
+                                    (looking-at "#?[ \t]*("))
+                           (let ((hdr-pos
+                                  (save-excursion
+                                    (unless (save-excursion
+                                              (beginning-of-line)
+                                              (looking-at "^[ \t]*\\(module\\|macromodule\\|interface\\|program\\)\\>"))
+                                      (verilog-continued-line-1 lim))
+                                    (beginning-of-line)
+                                    (when (looking-at "^[ \t]*\\(module\\|macromodule\\|interface\\|program\\)\\>")
+                                      (skip-chars-forward " \t")
+                                      (point)))))
+                             (when hdr-pos
+                               (goto-char hdr-pos)
+                               (throw 'nesting 'statement))))
+                         (goto-char starting_position)))
 
                      (if (looking-at "\\<else\\>")
                          ;; search back for governing if, striding across begin..end pairs

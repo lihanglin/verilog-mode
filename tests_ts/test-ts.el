@@ -550,7 +550,43 @@
                                "        bit [WXuopId-1:0] xuopid;\n"
                                "        bit [WZLrnId-1:0] zlrn;\n"
                                "    } zrf_wr_info_t;\n"
-                               "endclass\n")))))))
+                               "endclass\n")))))
+
+    ;; 1.8 Verify standalone `(' and `#(' lines on functions, modules, and instantiations
+    (with-temp-buffer
+      (let ((indent-tabs-mode nil)
+            (verilog-indent-lists nil)
+            (verilog-indent-level 4)
+            (verilog-indent-level-module 4)
+            (verilog-indent-level-declaration 4)
+            (verilog-indent-level-behavioral 4)
+            (verilog-cexp-indent 4)
+            (verilog-case-indent 4)
+            (verilog-align-decl-dimension t)
+            (verilog-align-decl-sub-dimension t)
+            (verilog-auto-lineup-on-semi nil))
+        (verilog-mode)
+        (setq-local indent-tabs-mode nil)
+        (insert "module foo;\n"
+                "    function automatic logic func_sras_has_entry\n"
+                "               (\n"
+                "        logic [IfuSrasPtrWidth-1:0] sras_read_ptr,\n"
+                "        logic [1:0] [IfuSrasPtrWidth-1:0] sras_write_ptr\n"
+                "               );\n"
+                "        return 1'b0;\n"
+                "    endfunction\n"
+                "endmodule\n")
+        (indent-region (point-min) (point-max) nil)
+        (should (equal (buffer-string)
+                       (concat "module foo;\n"
+                               "    function automatic logic func_sras_has_entry\n"
+                               "    (\n"
+                               "        logic       [IfuSrasPtrWidth-1:0] sras_read_ptr,\n"
+                               "        logic [1:0] [IfuSrasPtrWidth-1:0] sras_write_ptr\n"
+                               "    );\n"
+                               "        return 1'b0;\n"
+                               "    endfunction\n"
+                               "endmodule\n")))))))
 
 (provide 'test-ts)
 ;;; test-ts.el ends here

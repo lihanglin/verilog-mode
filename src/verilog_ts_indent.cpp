@@ -569,6 +569,17 @@ bool parse_inst_port_row(const BufferState &bs, TSNode cnode, AlignRow &row) {
   if (first_nb != sb || bs.text[sb] != '.') return false;
 
   TSNode pname = ts_node_child_by_field_name(cnode, "port_name", 9);
+  if (ts_node_is_null(pname)) {
+    uint32_t ccount = ts_node_child_count(cnode);
+    for (uint32_t i = 0; i < ccount; ++i) {
+      TSNode ch = ts_node_child(cnode, i);
+      std::string_view ct = ts_node_type(ch);
+      if (ct == "simple_identifier" || ct == "escaped_identifier") {
+        pname = ch;
+        break;
+      }
+    }
+  }
   if (ts_node_is_null(pname)) return false;
 
   std::string port_spec = "." + trim_ws_indent(bs.node_text(pname));
@@ -781,16 +792,30 @@ make_closing_line_edit(const BufferState &bs, uint32_t close_b,
   while (c_nb < c_eb && (bs.text[c_nb] == ' ' || bs.text[c_nb] == '\t')) {
     ++c_nb;
   }
-  if (c_nb != close_b) return std::nullopt;
-  uint32_t after_b = c_nb + 1;
+  bool has_hash_prefix = false;
+  if (c_nb != close_b) {
+    if (expected_char == '(' && c_nb < close_b && bs.text[c_nb] == '#') {
+      uint32_t p = c_nb + 1;
+      while (p < close_b && (bs.text[p] == ' ' || bs.text[p] == '\t')) ++p;
+      if (p == close_b) {
+        has_hash_prefix = true;
+      } else {
+        return std::nullopt;
+      }
+    } else {
+      return std::nullopt;
+    }
+  }
+  uint32_t after_b = close_b + 1;
   while (after_b < c_eb &&
          (bs.text[after_b] == ' ' || bs.text[after_b] == '\t')) {
     ++after_b;
   }
   std::string line(header_col, ' ');
+  if (has_hash_prefix) line.push_back('#');
   line.push_back(expected_char);
   if (after_b < c_eb) {
-    if (after_b > c_nb + 1) line.push_back(' ');
+    if (after_b > close_b + 1) line.push_back(' ');
     line += trim_ws_indent(bs.slice(after_b, c_eb));
   }
   return std::make_tuple(c_sb, c_eb, std::move(line));
@@ -834,12 +859,22 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
 
   TSNode root = ts_tree_root_node(bs.tree);
   uint32_t probe_b = first_nb;
+  uint32_t open_paren_at_line = n;
   if (bs.text[first_nb] == ')') {
     uint32_t prev = backward_syntactic_ws_bytes(bs, first_nb, 0, false);
     if (prev > 0) probe_b = prev - 1;
   } else if (bs.text[first_nb] == '(') {
+    open_paren_at_line = first_nb;
     uint32_t next = forward_syntactic_ws_bytes(bs, first_nb + 1, n, false);
     if (next < n) probe_b = next;
+  } else if (bs.text[first_nb] == '#') {
+    uint32_t p = first_nb + 1;
+    while (p < le && (bs.text[p] == ' ' || bs.text[p] == '\t')) ++p;
+    if (p < le && bs.text[p] == '(') {
+      open_paren_at_line = p;
+      uint32_t next = forward_syntactic_ws_bytes(bs, p + 1, n, false);
+      if (next < n) probe_b = next;
+    }
   }
   TSNode cur = ts_node_descendant_for_byte_range(root, probe_b, probe_b);
 
@@ -847,7 +882,8 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
     std::string_view nt = ts_node_type(walk);
 
     // 1.1 ANSI Port List Tabular Alignment (module/interface/program & function/task)
-    if (nt == "list_of_port_declarations" || nt == "tf_port_list") {
+    if (nt == "list_of_port_declarations" || nt == "tf_port_list" ||
+        nt == "class_constructor_arg_list") {
       uint32_t open_b = n;
       if (nt == "list_of_port_declarations") {
         open_b = ts_node_start_byte(walk);
@@ -856,8 +892,23 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
             backward_syntactic_ws_bytes(bs, ts_node_start_byte(walk), 0, false);
         if (prev > 0 && bs.text[prev - 1] == '(') open_b = prev - 1;
       }
-      if (bs.text[first_nb] == '(' && first_nb != open_b) return elisp_nil(env);
+      if (open_paren_at_line < n && open_paren_at_line != open_b) {
+        return elisp_nil(env);
+      }
       TSNode port_parent = ts_node_parent(walk);
+      while (!ts_node_is_null(port_parent)) {
+        TSNode gp = ts_node_parent(port_parent);
+        if (ts_node_is_null(gp)) break;
+        std::string_view gpt = ts_node_type(gp);
+        if (gpt == "function_declaration" || gpt == "task_declaration" ||
+            gpt == "function_prototype" || gpt == "task_prototype" ||
+            gpt == "class_method" || gpt == "dpi_function_proto" ||
+            gpt == "dpi_task_proto" || gpt == "dpi_import_export") {
+          port_parent = gp;
+        } else {
+          break;
+        }
+      }
       uint32_t port_hdr_b = !ts_node_is_null(port_parent)
                                 ? ts_node_start_byte(port_parent)
                                 : ts_node_start_byte(walk);
@@ -868,10 +919,18 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
       for (uint32_t i = 0; i < count; ++i) {
         TSNode ch = ts_node_child(walk, i);
         std::string_view ct = ts_node_type(ch);
+        TSNode port_node = ch;
+        if (ct == "class_constructor_arg" && ts_node_child_count(ch) > 0) {
+          TSNode inner = ts_node_child(ch, 0);
+          if (std::string_view(ts_node_type(inner)) == "tf_port_item") {
+            port_node = inner;
+            ct = "tf_port_item";
+          }
+        }
         if (ct == "ansi_port_declaration" || ct == "port_declaration" ||
             ct == "tf_port_item") {
           AlignRow row;
-          if (!parse_ansi_port_row(bs, ch, row)) return elisp_nil(env);
+          if (!parse_ansi_port_row(bs, port_node, row)) return elisp_nil(env);
           rows.push_back(std::move(row));
         }
       }
@@ -889,7 +948,7 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
           (open_b < n) ? make_closing_line_edit(bs, open_b, header_col, '(')
                        : std::nullopt;
       uint32_t close_b =
-          (nt == "tf_port_list")
+          (nt == "tf_port_list" || nt == "class_constructor_arg_list")
               ? forward_syntactic_ws_bytes(bs, ts_node_end_byte(walk), n, false)
               : (ts_node_end_byte(walk) > 0 ? ts_node_end_byte(walk) - 1 : 0);
       auto closing_line = make_closing_line_edit(bs, close_b, header_col, ')');
@@ -961,14 +1020,17 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
       }
     }
 
-    // 1.3 Module Instantiation Port Connection Alignment
+    // 1.3 Module Instantiation Port & Parameter Connection Alignment
     if (nt == "list_of_port_connections" ||
-        nt == "list_of_checker_port_connections") {
+        nt == "list_of_checker_port_connections" ||
+        nt == "list_of_parameter_value_assignments") {
       uint32_t prev_b =
           backward_syntactic_ws_bytes(bs, ts_node_start_byte(walk), 0, false);
       uint32_t open_b =
           (prev_b > 0 && bs.text[prev_b - 1] == '(') ? (prev_b - 1) : n;
-      if (bs.text[first_nb] == '(' && first_nb != open_b) return elisp_nil(env);
+      if (open_paren_at_line < n && open_paren_at_line != open_b) {
+        return elisp_nil(env);
+      }
       TSNode inst_parent = ts_node_parent(walk);
       TSNode inst_outer =
           (!ts_node_is_null(inst_parent) &&
@@ -992,7 +1054,8 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
         TSNode ch = ts_node_child(walk, i);
         std::string_view ct = ts_node_type(ch);
         if (ct == "named_port_connection" ||
-            ct == "named_checker_port_connection") {
+            ct == "named_checker_port_connection" ||
+            ct == "named_parameter_assignment") {
           AlignRow row;
           if (!parse_inst_port_row(bs, ch, row)) return elisp_nil(env);
           rows.push_back(std::move(row));
