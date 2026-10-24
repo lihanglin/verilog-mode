@@ -35,7 +35,7 @@ src/verilog-ts-core.so: $(wildcard src/*.cpp src/*.hpp src/Makefile)
 	$(MAKE) -C src all
 
 test_ts: src/verilog-ts-core.so e/verilog-mode.elc
-	$(EMACS) --batch -Q -l ../phase1_exp/test-ts.el -f ert-run-tests-batch-and-exit
+	$(EMACS) --batch -Q -l ./tests_ts/test-ts.el -f ert-run-tests-batch-and-exit
 
 release : .timestamps
 install : .timestamps
