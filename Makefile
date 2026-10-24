@@ -147,4 +147,7 @@ verilog-mode-tognu.el: e/verilog-mode.el Makefile
 # Clean
 
 clean::
+	make -C src clean
+	make -C tree-sitter clean
+	make -C tree-sitter-systemverilog clean
 	/bin/rm -rf .timestamps e x test_dir verilog-mode.patch verilog-mode-tognu.el *.info
