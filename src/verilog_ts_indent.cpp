@@ -1001,44 +1001,49 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
     rows.push_back(std::move(r));
   }
 
-  // Determine base_col for the declaration group: prefer first non-tab line's
-  // positive space indent, or fall back to enclosing scope indent / first row.
+  // Determine base_col for the declaration group: prefer enclosing scope
+  // indent when inside a module/function/task/block, or fall back to first
+  // non-tab line's positive space indent for top-level snippets.
   uint32_t base_col = 0;
-  bool found_indent = false;
-  for (const auto &r : rows) {
-    bool has_tab = false;
-    for (uint32_t i = r.line_sb; i < r.first_nb; ++i) {
-      if (bs.text[i] == '\t') {
-        has_tab = true;
-        break;
+  bool found_scope = false;
+  uint32_t first_col = bs.byte_to_column(rows.front().first_nb);
+  for (TSNode p = ts_node_parent(start_decl); !ts_node_is_null(p);
+       p = ts_node_parent(p)) {
+    std::string_view pt = ts_node_type(p);
+    if (pt == "module_declaration" || pt == "interface_declaration" ||
+        pt == "program_declaration" || pt == "package_declaration" ||
+        pt == "checker_declaration" || pt == "class_declaration" ||
+        pt == "function_declaration" || pt == "task_declaration" ||
+        pt == "seq_block" || pt == "par_block" || pt == "generate_region") {
+      uint32_t p_sb = bs.line_start_byte(ts_node_start_byte(p));
+      uint32_t p_nb = p_sb;
+      while (p_nb < n && (bs.text[p_nb] == ' ' || bs.text[p_nb] == '\t')) {
+        ++p_nb;
       }
-    }
-    if (!has_tab && r.first_nb > r.line_sb) {
-      base_col = r.first_nb - r.line_sb;
-      found_indent = true;
+      uint32_t header_col = bs.byte_to_column(p_nb);
+      base_col = compute_block_base_col(header_col, first_col, indent_level);
+      found_scope = true;
       break;
     }
   }
-  if (!found_indent) {
-    base_col = bs.byte_to_column(rows.front().first_nb);
-    if (base_col == 0) {
-      for (TSNode p = ts_node_parent(start_decl); !ts_node_is_null(p);
-           p = ts_node_parent(p)) {
-        std::string_view pt = ts_node_type(p);
-        if (pt == "module_declaration" || pt == "interface_declaration" ||
-            pt == "program_declaration" || pt == "package_declaration" ||
-            pt == "class_declaration" || pt == "function_declaration" ||
-            pt == "task_declaration" || pt == "seq_block") {
-          uint32_t p_sb = bs.line_start_byte(ts_node_start_byte(p));
-          uint32_t p_nb = p_sb;
-          while (p_nb < n && (bs.text[p_nb] == ' ' || bs.text[p_nb] == '\t')) {
-            ++p_nb;
-          }
-          base_col = bs.byte_to_column(p_nb) +
-                     static_cast<uint32_t>(std::max<intmax_t>(1, indent_level));
+  if (!found_scope) {
+    bool found_indent = false;
+    for (const auto &r : rows) {
+      bool has_tab = false;
+      for (uint32_t i = r.line_sb; i < r.first_nb; ++i) {
+        if (bs.text[i] == '\t') {
+          has_tab = true;
           break;
         }
       }
+      if (!has_tab && r.first_nb > r.line_sb) {
+        base_col = r.first_nb - r.line_sb;
+        found_indent = true;
+        break;
+      }
+    }
+    if (!found_indent) {
+      base_col = first_col;
     }
   }
 

@@ -489,7 +489,34 @@
       (should (looking-back "logic second_sig;" (- (point) 20)))
       ;; Now pressing TAB kicks off alignment of the declaration block
       (electric-verilog-tab)
-      (should (string-match-p "logic \\[7:0\\] first_sig;\n   logic       second_sig;" (buffer-string))))))
+      (should (string-match-p "logic \\[7:0\\] first_sig;\n   logic       second_sig;" (buffer-string))))
+
+    ;; 1.6 Verify declaration inside nested scope (`function') indents relative to enclosing scope
+    (with-temp-buffer
+      (let ((indent-tabs-mode nil)
+            (verilog-indent-lists nil)
+            (verilog-indent-level 4)
+            (verilog-indent-level-module 4)
+            (verilog-indent-level-declaration 4)
+            (verilog-indent-level-behavioral 4)
+            (verilog-cexp-indent 4)
+            (verilog-case-indent 4)
+            (verilog-align-decl-dimension t)
+            (verilog-align-decl-sub-dimension t)
+            (verilog-auto-lineup-on-semi nil))
+        (verilog-mode)
+        (setq-local indent-tabs-mode nil)
+        (insert "module foo;\n"
+                "    function automatic logic fn_check_thermal (\n"
+                "        input [3:0] in\n"
+                "    );\n"
+                "    logic [3:0] in_p1;\n"
+                "        in_p1 = in + 1'b1;\n"
+                "        return (in & in_p1) == 4'b0000;\n"
+                "    endfunction\n"
+                "endmodule\n")
+        (indent-region (point-min) (point-max) nil)
+        (should (string-match-p "^        logic \\[3:0\\] in_p1;$" (buffer-string)))))))
 
 (provide 'test-ts)
 ;;; test-ts.el ends here
