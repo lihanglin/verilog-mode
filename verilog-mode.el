@@ -189,6 +189,7 @@
 (declare-function verilog-ts-decl-align-info "ext:verilog-ts-core")
 (declare-function verilog-ts-expr-align-info "ext:verilog-ts-core")
 (declare-function verilog-ts-endcomment-info "ext:verilog-ts-core")
+(declare-function verilog-ts-align-block "ext:verilog-ts-core")
 (declare-function verilog-ts-read-decls "ext:verilog-ts-core")
 (declare-function verilog-ts-ast-decls "ext:verilog-ts-core")
 (declare-function verilog-ts-read-inst-info "ext:verilog-ts-core")
@@ -466,6 +467,32 @@ are lineup only when \\[verilog-pretty-declarations] is typed."
   :group 'verilog-mode-indent )
 (put 'verilog-auto-lineup 'safe-local-variable
      (lambda (x) (memq x '(nil all assignments declarations))))
+
+(defcustom verilog-auto-lineup-on-semi t
+  "Non-nil means typing `;' automatically aligns declarations like pressing <TAB>.
+When nil, typing `;' (`electric-verilog-semi') only indents the current line
+without triggering tabular block alignment; pressing <TAB> (`electric-verilog-tab')
+kicks off tabular alignment."
+  :group 'verilog-mode-indent
+  :type 'boolean)
+(put 'verilog-auto-lineup-on-semi 'safe-local-variable #'verilog-booleanp)
+
+(defcustom verilog-align-decl-dimension nil
+  "Non-nil means align data type and packed array dimensions in declarations.
+When non-nil, tabularly aligns `direction', `type', `packed dimensions', and
+`identifier' across declaration blocks, ANSI port lists, and struct/union
+members, and aligns `.port_name (signal)' in module instantiations."
+  :group 'verilog-mode-indent
+  :type 'boolean)
+(put 'verilog-align-decl-dimension 'safe-local-variable #'verilog-booleanp)
+
+(defcustom verilog-align-decl-sub-dimension nil
+  "Non-nil means align each packed sub-dimension into its own column right-to-left.
+Requires `verilog-align-decl-dimension' to be non-nil; ignored when
+`verilog-align-decl-dimension' is nil."
+  :group 'verilog-mode-indent
+  :type 'boolean)
+(put 'verilog-align-decl-sub-dimension 'safe-local-variable #'verilog-booleanp)
 
 (defcustom verilog-indent-level 3
   "Indentation of Verilog statements with respect to containing block."
@@ -4176,6 +4203,27 @@ With optional ARG, remove existing end of line comments."
   (interactive)
   (electric-verilog-terminate-line 1))
 
+(defun verilog-align-block-at-point (&optional pos)
+  "Perform AST-driven tabular alignment of block or declaration group at POS."
+  (interactive)
+  (let ((edits (verilog-ts-align-block
+                (or pos (point))
+                verilog-align-decl-dimension
+                (and verilog-align-decl-dimension
+                     verilog-align-decl-sub-dimension)
+                verilog-indent-level)))
+    (when edits
+      (save-excursion
+        (dolist (edit (reverse edits))
+          (let ((beg (nth 0 edit))
+                (end (nth 1 edit))
+                (new-str (nth 2 edit)))
+            (unless (string= (buffer-substring-no-properties beg end) new-str)
+              (goto-char beg)
+              (insert new-str)
+              (delete-region (point) (+ (point) (- end beg)))))))
+      t)))
+
 (defun electric-verilog-semi ()
   "Insert `;' character and reindent the line."
   (interactive)
@@ -4187,7 +4235,10 @@ With optional ARG, remove existing end of line comments."
     (save-excursion
       (beginning-of-line)
       (verilog-forward-ws&directives)
-      (verilog-indent-line))
+      (let ((verilog-auto-lineup (if verilog-auto-lineup-on-semi
+                                     verilog-auto-lineup
+                                   nil)))
+        (verilog-indent-line)))
     (if (and verilog-auto-newline
 	     (not (verilog-parenthesis-depth)))
 	(electric-verilog-terminate-line))))
@@ -4246,7 +4297,16 @@ With optional ARG, remove existing end of line comments."
    ;; The region is active, indent it.
    ((and (region-active-p)
 	 (not (eq (region-beginning) (region-end))))
-    (indent-region (region-beginning) (region-end) nil))
+    (indent-region (region-beginning) (region-end) nil)
+    (when (or verilog-align-decl-dimension
+              (not verilog-auto-lineup-on-semi))
+      (save-excursion
+        (let ((end-mk (copy-marker (region-end))))
+          (goto-char (region-beginning))
+          (while (< (point) end-mk)
+            (verilog-align-block-at-point)
+            (forward-line 1))
+          (set-marker end-mk nil)))))
    ((or verilog-tab-always-indent
 	(save-excursion
 	  (skip-chars-backward " \t")
@@ -6882,6 +6942,11 @@ Only look at a few lines to determine indent level."
      (; handle indentation ignoring
       (verilog-indent-ignore-p)
       nil)
+     ((and verilog-auto-lineup
+           (or verilog-align-decl-dimension
+               (not verilog-auto-lineup-on-semi))
+           (verilog-align-block-at-point))
+      nil)
      (; handle continued exp
       (eq type 'cexp)
       (let ((here (point)))
@@ -7370,6 +7435,11 @@ Be verbose about progress unless optional QUIET set."
 		(verilog-forward-ws&directives)
 		(forward-line -1)))
 	      (forward-line 1))
+            (when (or verilog-align-decl-dimension
+                      (not verilog-auto-lineup-on-semi))
+              (save-excursion
+                (goto-char (marker-position startpos))
+                (verilog-align-block-at-point)))
             ;; Align comments if enabled
             (when verilog-align-decl-expr-comments
               (verilog-align-comments startpos endpos)))
@@ -15319,7 +15389,9 @@ Files are checked based on `verilog-library-flags'."
        verilog-after-save-font-hook
        verilog-align-assign-expr
        verilog-align-comment-distance
+       verilog-align-decl-dimension
        verilog-align-decl-expr-comments
+       verilog-align-decl-sub-dimension
        verilog-align-ifelse
        verilog-align-typedef-regexp
        verilog-align-typedef-words
@@ -15341,6 +15413,7 @@ Files are checked based on `verilog-library-flags'."
        verilog-auto-inst-template-numbers
        verilog-auto-inst-vector
        verilog-auto-lineup
+       verilog-auto-lineup-on-semi
        verilog-auto-newline
        verilog-auto-output-ignore-regexp
        verilog-auto-read-includes

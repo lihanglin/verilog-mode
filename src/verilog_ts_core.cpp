@@ -17,6 +17,37 @@ struct CacheEntry {
 std::list<CacheEntry> g_buffer_lru;
 TSParser *g_parser = nullptr;
 std::unordered_map<std::string, TSQuery *> g_query_cache;
+std::vector<emacs_value> g_temp_refs;
+
+emacs_value protect_temp_ref(emacs_env *env, emacs_value val) {
+  if (val && env->non_local_exit_check(env) == emacs_funcall_exit_return) {
+    emacs_value gref = env->make_global_ref(env, val);
+    if (gref && env->non_local_exit_check(env) == emacs_funcall_exit_return) {
+      g_temp_refs.push_back(gref);
+    }
+  }
+  return val;
+}
+
+void flush_temp_refs(emacs_env *env) {
+  if (g_temp_refs.empty()) return;
+  auto exit_state = env->non_local_exit_check(env);
+  emacs_value sym = nullptr;
+  emacs_value data = nullptr;
+  if (exit_state != emacs_funcall_exit_return) {
+    exit_state = env->non_local_exit_get(env, &sym, &data);
+    env->non_local_exit_clear(env);
+  }
+  for (emacs_value gref : g_temp_refs) {
+    env->free_global_ref(env, gref);
+  }
+  g_temp_refs.clear();
+  if (exit_state == emacs_funcall_exit_signal) {
+    env->non_local_exit_signal(env, sym, data);
+  } else if (exit_state == emacs_funcall_exit_throw) {
+    env->non_local_exit_throw(env, sym, data);
+  }
+}
 
 TSParser *ensure_parser() {
   if (!g_parser) {
@@ -94,7 +125,10 @@ emacs_value elisp_intern(emacs_env *env, const char *name) {
 }
 
 emacs_value elisp_string(emacs_env *env, std::string_view sv) {
-  return env->make_string(env, sv.data(), static_cast<ptrdiff_t>(sv.size()));
+  std::string s(sv);
+  emacs_value v =
+      env->make_string(env, s.c_str(), static_cast<ptrdiff_t>(s.size()));
+  return protect_temp_ref(env, v);
 }
 
 emacs_value elisp_int(emacs_env *env, intmax_t val) {
@@ -103,21 +137,24 @@ emacs_value elisp_int(emacs_env *env, intmax_t val) {
 
 emacs_value elisp_cons(emacs_env *env, emacs_value car, emacs_value cdr) {
   emacs_value args[2] = {car, cdr};
-  return env->funcall(env, env->intern(env, "cons"), 2, args);
+  emacs_value v = env->funcall(env, env->intern(env, "cons"), 2, args);
+  return protect_temp_ref(env, v);
 }
 
 emacs_value elisp_list(emacs_env *env, const std::vector<emacs_value> &elems) {
   if (elems.empty()) return elisp_nil(env);
-  return env->funcall(env, env->intern(env, "list"),
-                      static_cast<ptrdiff_t>(elems.size()),
-                      const_cast<emacs_value *>(elems.data()));
+  emacs_value v = env->funcall(env, env->intern(env, "list"),
+                               static_cast<ptrdiff_t>(elems.size()),
+                               const_cast<emacs_value *>(elems.data()));
+  return protect_temp_ref(env, v);
 }
 
 emacs_value elisp_vector(emacs_env *env,
                          const std::vector<emacs_value> &elems) {
-  return env->funcall(env, env->intern(env, "vector"),
-                      static_cast<ptrdiff_t>(elems.size()),
-                      const_cast<emacs_value *>(elems.data()));
+  emacs_value v = env->funcall(env, env->intern(env, "vector"),
+                               static_cast<ptrdiff_t>(elems.size()),
+                               const_cast<emacs_value *>(elems.data()));
+  return protect_temp_ref(env, v);
 }
 
 std::string extract_string(emacs_env *env, emacs_value val) {
@@ -331,13 +368,27 @@ emacs_value make_node_plist(emacs_env *env, const BufferState &bs, TSNode node,
   return elisp_list(env, elems);
 }
 
+namespace {
+
+emacs_value module_trampoline(emacs_env *env, ptrdiff_t nargs,
+                              emacs_value args[], void *data) EMACS_NOEXCEPT {
+  auto fn = reinterpret_cast<emacs_value (*)(
+      emacs_env *, ptrdiff_t, emacs_value *, void *) EMACS_NOEXCEPT>(data);
+  emacs_value ret = fn(env, nargs, args, nullptr);
+  flush_temp_refs(env);
+  return ret;
+}
+
+} // namespace
+
 void bind_function(
     emacs_env *env, const char *name, ptrdiff_t min_arity, ptrdiff_t max_arity,
     emacs_value (*func)(emacs_env *env, ptrdiff_t nargs, emacs_value args[],
                         void *data) EMACS_NOEXCEPT,
     const char *doc) {
-  emacs_value fn = env->make_function(env, min_arity, max_arity, func, doc,
-                                      nullptr);
+  emacs_value fn = env->make_function(env, min_arity, max_arity,
+                                      module_trampoline, doc,
+                                      reinterpret_cast<void *>(func));
   emacs_value sym = env->intern(env, name);
   emacs_value fset_args[2] = {sym, fn};
   env->funcall(env, env->intern(env, "fset"), 2, fset_args);

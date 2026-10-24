@@ -65,6 +65,24 @@ run("$Emacs --batch --no-site-file -l $tmpdir/verilog-mode.elc"
     ." -l ./batch_prof.el"
     );
 
+my @tests_new = map { s!^.*/!!; $_;} sort glob("tests_new_ok/*");
+if (@tests_new) {
+    mkdir "$tmpdir/b_new" unless -d "$tmpdir/b_new";
+    my @tests_new_args;
+    foreach my $test (@tests_new) {
+        run("/bin/cp tests_new/$test $tmpdir/b_new/$test");
+        push @tests_new_args, "$tmpdir/b_new/$test";
+    }
+    run("$Emacs --batch --no-site-file -l $tmpdir/verilog-mode.elc"
+        ." -l ./batch_test.el"
+        ." ".join(' ', @tests_new_args)
+        ." -f verilog-batch-test-new"
+        );
+    foreach my $test (@tests_new) {
+        run("diff tests_new_ok/$test $tmpdir/b_new/$test");
+    }
+}
+
 #######################################################################
 
 sub run {
