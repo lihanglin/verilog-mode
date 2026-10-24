@@ -523,11 +523,14 @@ bool parse_ansi_port_row(const BufferState &bs, TSNode pnode, AlignRow &row) {
   uint32_t id_sb = ts_node_start_byte(name_node);
   if (id_sb <= sb) return false;
 
-  TSNode dir_node = find_descendant_of_type(pnode, "port_direction", id_sb);
+  TSNode dir_node = find_descendant_of_type(pnode, "tf_port_direction", id_sb);
+  if (ts_node_is_null(dir_node)) {
+    dir_node = find_descendant_of_type(pnode, "port_direction", id_sb);
+  }
   std::string dir_str;
   uint32_t after_dir_b = sb;
   if (!ts_node_is_null(dir_node)) {
-    dir_str = trim_ws_indent(bs.node_text(dir_node));
+    dir_str = normalize_ws_indent(bs.node_text(dir_node));
     after_dir_b = ts_node_end_byte(dir_node);
   }
 
