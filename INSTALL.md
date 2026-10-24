@@ -176,6 +176,61 @@ Open any `.v` or `.sv` file in Emacs and run the following checks:
 
 ---
 
+## 5. Standalone Testing & Formatting with `verilog-mode-wrapper`
+
+If you want to try the latest built `e/verilog-mode.el` (and `src/verilog-ts-core.so`) with your system-wide installed Emacs (`/usr/bin/emacs`) without modifying your `~/.emacs`, use `./verilog-mode-wrapper`.
+
+By default, `verilog-mode-wrapper`:
+- Uses `/usr/bin/emacs` (or `$EMACS` / `--emacs <path>`) with `-Q` so your personal init files do not interfere.
+- Prepends `e/` to `load-path` and loads `e/verilog-mode.el` (which automatically loads `src/verilog-ts-core.so`).
+- Loads `./verilog-mode-config.el` if present (or a custom file via `--config <file>`, or stock defaults via `--no-config`).
+
+### Usage Examples
+
+```bash
+# Show help and available options:
+./verilog-mode-wrapper --help
+
+# Format / re-indent SystemVerilog or Verilog file(s) in batch mode:
+./verilog-mode-wrapper --indent test.sv
+
+# Expand /*AUTO...*/ templates in batch mode (default batch action):
+./verilog-mode-wrapper --auto test.sv
+
+# Inject, delete, or diff /*AUTO...*/ templates in batch mode:
+./verilog-mode-wrapper --inject test.sv
+./verilog-mode-wrapper --delete test.sv
+./verilog-mode-wrapper --diff test.sv
+
+# Open file(s) interactively in terminal Emacs (-nw) with the built verilog-mode & config:
+./verilog-mode-wrapper -i test.sv
+
+# Open file(s) interactively in GUI Emacs:
+./verilog-mode-wrapper -i --gui test.sv
+
+# Specify a custom Elisp config file or a specific Emacs binary:
+./verilog-mode-wrapper --indent --config ./verilog-mode-config.el --emacs /usr/bin/emacs test.sv
+
+# Run with stock verilog-mode defaults (ignoring ./verilog-mode-config.el):
+./verilog-mode-wrapper --indent --no-config test.sv
+```
+
+### Command-Line Options
+
+| Option | Description |
+| :--- | :--- |
+| `-h`, `--help` | Show usage and `/*AUTO...*/` cheat sheet |
+| `--indent` | Format / re-indent file(s) in place (`verilog-batch-indent`) |
+| `--auto` | Expand `/*AUTO...*/` in place (`verilog-batch-auto`, default batch action) |
+| `--inject` | Inject `/*AUTO...*/` into file(s) (`verilog-batch-inject-auto`) |
+| `--delete` | Delete generated `/*AUTO...*/` expansions (`verilog-batch-delete-auto`) |
+| `--diff` | Check for differences in `/*AUTO...*/` expansions (`verilog-batch-diff-auto`) |
+| `-i`, `--interactive` | Launch interactive Emacs (`-nw` by default) with built `verilog-mode` loaded |
+| `--gui` | With `-i` / `--interactive`, launch GUI Emacs instead of terminal (`-nw`) |
+| `--config <file>` | Load custom Elisp configuration file (default: `./verilog-mode-config.el`) |
+| `--no-config` | Skip loading `./verilog-mode-config.el` |
+| `--emacs <path>` | Specify Emacs executable (default: `$EMACS` or `/usr/bin/emacs`) |
+
 ---
 
 ## 6. Troubleshooting

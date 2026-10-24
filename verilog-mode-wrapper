@@ -1,0 +1,194 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use Cwd qw(getcwd abs_path);
+use Getopt::Long;
+use Pod::Usage;
+use File::Basename;
+use File::Spec::Functions;
+
+my ($program, $program_dir) = (basename($0), dirname(abs_path($0)));
+
+sub find_emacs {
+	my ($override) = @_;
+	return $override if defined($override) && $override ne '';
+	return $ENV{EMACS} if defined($ENV{EMACS}) && $ENV{EMACS} ne '';
+	return "/usr/bin/emacs" if -x "/usr/bin/emacs";
+	for my $dir (split(/:/, $ENV{PATH} || "")) {
+		my $cand = "$dir/emacs";
+		return $cand if -x $cand;
+	}
+	my $opt_emacs = "${program_dir}/../opt/bin/emacs-26.1";
+	return abs_path($opt_emacs) if -x $opt_emacs;
+	return "emacs";
+}
+
+sub pr_error {
+	my ($fmt, @args) = @_;
+	my $msg = @args ? sprintf($fmt, @args) : $fmt;
+	print STDERR "$program: ERROR: $msg\n";
+	exit 1;
+}
+
+sub pr_warning {
+	my ($fmt, @args) = @_;
+	my $msg = @args ? sprintf($fmt, @args) : $fmt;
+	print STDERR "$program: WARNING: $msg\n";
+}
+
+my %commands = (
+	"help"                      => 0,
+	"verilog-batch-auto"        => 0,
+	"verilog-batch-indent"      => 0,
+	"verilog-batch-inject-auto" => 0,
+	"verilog-batch-delete-auto" => 0,
+	"verilog-batch-diff-auto"   => 0,
+);
+my $custom_config;
+my $no_config   = 0;
+my $emacs_opt;
+my $interactive = 0;
+my $gui         = 0;
+
+sub parse_cmdline {
+	GetOptions(
+		"help|h"        => sub { $commands{"help"}                      = 1; },
+		"auto"          => sub { $commands{"verilog-batch-auto"}        = 1; },
+		"indent"        => sub { $commands{"verilog-batch-indent"}      = 1; },
+		"inject"        => sub { $commands{"verilog-batch-inject-auto"} = 1; },
+		"delete"        => sub { $commands{"verilog-batch-delete-auto"} = 1; },
+		"diff"          => sub { $commands{"verilog-batch-diff-auto"}   = 1; },
+		"config=s"      => \$custom_config,
+		"no-config"     => \$no_config,
+		"emacs=s"       => \$emacs_opt,
+		"interactive|i" => \$interactive,
+		"gui"           => \$gui,
+	) or pod2usage(1);
+
+	pod2usage(-exitval => 0, -verbose => 1) if ($commands{help});
+}
+
+sub resolve_verilog_mode_el {
+	my $built_el = "${program_dir}/e/verilog-mode.el";
+	return $built_el if -f $built_el;
+	my $src_el = "${program_dir}/verilog-mode.el";
+	return $src_el if -f $src_el;
+	pr_error("Cannot find e/verilog-mode.el or verilog-mode.el in %s (run 'make compile' first)", $program_dir);
+}
+
+sub emacs_do_cmd {
+	my (@files) = @_;
+
+	my $emacs = find_emacs($emacs_opt);
+	my ($emacs_ver) = `$emacs -Q --version 2>/dev/null` =~ /^GNU\s+Emacs\s+(\d+)/;
+	$emacs_ver ||= 26;
+
+	my $vm_el  = resolve_verilog_mode_el();
+	my $vm_dir = dirname($vm_el);
+
+	my @cmd = ($emacs, "-Q");
+	if (!$interactive) {
+		push(@cmd, "--batch");
+	} elsif (!$gui) {
+		push(@cmd, "-nw");
+	}
+
+	if ($emacs_ver == 23) {
+		push(@cmd, "--unibyte");
+	} else {
+		push(@cmd, "-nl");
+	}
+
+	push(@cmd, "--eval", qq/(add-to-list 'load-path "$vm_dir")/);
+	push(@cmd, "-l",     $vm_el);
+	push(@cmd, "--eval", qq/(add-to-list 'auto-mode-alist '("\\\\.[ds]?va?h?\\\\'" . verilog-mode))/);
+	push(@cmd, "--eval", qq/(add-to-list 'auto-mode-alist '("\\\\.svi\\\\'" . verilog-mode))/);
+	push(@cmd, "--eval", qq/(setq vc-handled-backends nil)/);
+	push(@cmd, "--eval", qq/(setq verilog-auto-arg-format 'single)/);
+
+	if (!$no_config) {
+		my $cfg = $custom_config || (-f "${program_dir}/verilog-mode-config.el" ? "${program_dir}/verilog-mode-config.el" : undef);
+		if (defined($custom_config) && !-f $custom_config) {
+			pr_error("Config file not found: %s", $custom_config);
+		}
+		if ($cfg && -f $cfg) {
+			push(@cmd, "-l", abs_path($cfg));
+		}
+	}
+
+	push(@cmd, @files);
+
+	if (!$interactive) {
+		my $verilogmode_cmd;
+		for my $k (keys %commands) {
+			next if $k eq "help";
+			$verilogmode_cmd = $k if ($commands{$k});
+		}
+		$verilogmode_cmd ||= "verilog-batch-auto";
+		push(@cmd, "-f", $verilogmode_cmd);
+	}
+
+	print "@cmd\n";
+	exec @cmd or pr_error("cannot execute cmd: @cmd");
+}
+
+sub main {
+	parse_cmdline();
+
+	my @files;
+	for my $f (@ARGV) {
+		if (!-f $f && !$interactive) {
+			pr_warning("%s: No such file", $f);
+			next;
+		}
+		push(@files, $f);
+	}
+
+	if (!@files && !$interactive) {
+		pod2usage(1);
+	}
+
+	emacs_do_cmd(@files);
+}
+
+main();
+
+__END__
+
+=head1 NAME
+
+verilog-mode-wrapper - Invoke built verilog-mode.el with system Emacs for batch formatting or interactive testing
+
+=head1 SYNOPSIS
+
+ verilog-mode-wrapper [options] <file1 file2 ...>
+
+ Options:
+ -h, --help           Show this help message
+ --indent             Format / re-indent file(s) in batch mode (verilog-batch-indent)
+ --auto               Expand AUTOs in batch mode (verilog-batch-auto, default)
+ --inject             Inject AUTOs into file(s) (verilog-batch-inject-auto)
+ --delete             Delete generated AUTOs (verilog-batch-delete-auto)
+ --diff               Check diffs in generated AUTOs (verilog-batch-diff-auto)
+ -i, --interactive    Open file(s) interactively in terminal Emacs (-nw) with built verilog-mode
+ --gui                With --interactive, launch GUI Emacs instead of terminal (-nw)
+ --config <file>      Load custom Elisp configuration file (default: ./verilog-mode-config.el)
+ --no-config          Do not load ./verilog-mode-config.el
+ --emacs <path>       Specify Emacs executable (default: $EMACS or /usr/bin/emacs)
+
+ AUTOs Cheat Sheet:
+ /*AUTOARG*/          For module instantiations
+ /*AUTOINST*/         For instantiation pins
+ /*AUTOREG*/          For registers
+ /*AUTORESET*/        For flop resets
+ /*AUTOINPUT*/        For making hierarchy inputs
+ /*AUTOINSTPARAM*/    For instantiation params
+ /*AUTOREGINPUT*/     For instantiation registers
+ /*AUTOTIEOFF*/       For output tieoffs
+ /*AUTOUNDEF*/        For `undef of local `defines
+ /*AUTOUNUSED*/       For unused inputs/inouts
+ /*AUTOWIRE*/         For instantiation wires
+
+=cut

@@ -1014,14 +1014,16 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
         pt == "program_declaration" || pt == "package_declaration" ||
         pt == "checker_declaration" || pt == "class_declaration" ||
         pt == "function_declaration" || pt == "task_declaration" ||
-        pt == "seq_block" || pt == "par_block" || pt == "generate_region") {
+        pt == "seq_block" || pt == "par_block" || pt == "generate_region" ||
+        pt == "generate_block") {
       uint32_t p_sb = bs.line_start_byte(ts_node_start_byte(p));
       uint32_t p_nb = p_sb;
       while (p_nb < n && (bs.text[p_nb] == ' ' || bs.text[p_nb] == '\t')) {
         ++p_nb;
       }
       uint32_t header_col = bs.byte_to_column(p_nb);
-      base_col = compute_block_base_col(header_col, first_col, indent_level);
+      base_col = header_col +
+                 static_cast<uint32_t>(std::max<intmax_t>(1, indent_level));
       found_scope = true;
       break;
     }
