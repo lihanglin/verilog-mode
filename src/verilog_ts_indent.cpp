@@ -630,12 +630,22 @@ emacs_value format_align_rows(
     uint32_t base_col, bool is_inst_ports, bool is_struct_or_port,
     bool align_dim, bool align_sub_dim,
     std::optional<std::tuple<uint32_t, uint32_t, std::string>> closing_edit =
+        std::nullopt,
+    std::optional<std::tuple<uint32_t, uint32_t, std::string>> opening_edit =
         std::nullopt) {
   if (rows.empty()) return elisp_nil(env);
 
   std::string indent_prefix(base_col, ' ');
   std::vector<emacs_value> out;
-  out.reserve(rows.size() + (closing_edit.has_value() ? 1 : 0));
+  out.reserve(rows.size() + (opening_edit.has_value() ? 1 : 0) +
+              (closing_edit.has_value() ? 1 : 0));
+
+  if (opening_edit.has_value()) {
+    const auto &[o_sb, o_eb, o_str] = *opening_edit;
+    out.push_back(elisp_list(env, {elisp_int(env, bs.byte_to_pos(o_sb)),
+                                   elisp_int(env, bs.byte_to_pos(o_eb)),
+                                   elisp_string(env, o_str)}));
+  }
 
   auto append_closing = [&]() {
     if (closing_edit.has_value()) {
@@ -863,43 +873,65 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
     }
 
     // 1.2 Packed Struct and Union Member Alignment
-    if (nt == "data_type") {
-      bool has_struct_union = false;
-      uint32_t count = ts_node_child_count(walk);
-      for (uint32_t i = 0; i < count; ++i) {
-        if (std::string_view(ts_node_type(ts_node_child(walk, i))) ==
-            "struct_union") {
-          has_struct_union = true;
-          break;
-        }
-      }
-      if (has_struct_union) {
-        std::vector<AlignRow> rows;
-        for (uint32_t i = 0; i < count; ++i) {
+    if (nt == "data_type" || nt == "type_declaration") {
+      TSNode dtype = walk;
+      if (nt == "type_declaration") {
+        dtype = {};
+        uint32_t tcount = ts_node_child_count(walk);
+        for (uint32_t i = 0; i < tcount; ++i) {
           TSNode ch = ts_node_child(walk, i);
-          if (std::string_view(ts_node_type(ch)) == "struct_union_member") {
-            AlignRow row;
-            if (!parse_decl_or_member_row(bs, ch, row)) return elisp_nil(env);
-            rows.push_back(std::move(row));
+          if (std::string_view(ts_node_type(ch)) == "data_type") {
+            dtype = ch;
+            break;
           }
         }
-        if (rows.empty()) return elisp_nil(env);
-        uint32_t header_sb = bs.line_start_byte(ts_node_start_byte(walk));
-        uint32_t header_nb = header_sb;
-        while (header_nb < n &&
-               (bs.text[header_nb] == ' ' || bs.text[header_nb] == '\t')) {
-          ++header_nb;
+      }
+      if (!ts_node_is_null(dtype)) {
+        bool has_struct_union = false;
+        uint32_t open_b = n;
+        uint32_t count = ts_node_child_count(dtype);
+        for (uint32_t i = 0; i < count; ++i) {
+          TSNode ch = ts_node_child(dtype, i);
+          std::string_view ct = ts_node_type(ch);
+          if (ct == "struct_union") {
+            has_struct_union = true;
+          } else if (ct == "{") {
+            open_b = ts_node_start_byte(ch);
+          }
         }
-        uint32_t header_col = bs.byte_to_column(header_nb);
-        uint32_t first_col = bs.byte_to_column(rows.front().first_nb);
-        uint32_t base_col =
-            compute_block_base_col(header_col, first_col, indent_level);
-        uint32_t close_b =
-            ts_node_end_byte(walk) > 0 ? ts_node_end_byte(walk) - 1 : 0;
-        auto closing_line =
-            make_closing_line_edit(bs, close_b, header_col, '}');
-        return format_align_rows(env, bs, rows, base_col, false, true,
-                                 align_dim, align_sub_dim, closing_line);
+        if (has_struct_union) {
+          std::vector<AlignRow> rows;
+          for (uint32_t i = 0; i < count; ++i) {
+            TSNode ch = ts_node_child(dtype, i);
+            if (std::string_view(ts_node_type(ch)) == "struct_union_member") {
+              AlignRow row;
+              if (!parse_decl_or_member_row(bs, ch, row)) return elisp_nil(env);
+              rows.push_back(std::move(row));
+            }
+          }
+          if (rows.empty()) return elisp_nil(env);
+          uint32_t header_sb = bs.line_start_byte(ts_node_start_byte(dtype));
+          uint32_t header_nb = header_sb;
+          while (header_nb < n &&
+                 (bs.text[header_nb] == ' ' || bs.text[header_nb] == '\t')) {
+            ++header_nb;
+          }
+          uint32_t header_col = bs.byte_to_column(header_nb);
+          uint32_t first_col = bs.byte_to_column(rows.front().first_nb);
+          uint32_t base_col =
+              compute_block_base_col(header_col, first_col, indent_level);
+          auto opening_line =
+              (open_b < n)
+                  ? make_closing_line_edit(bs, open_b, header_col, '{')
+                  : std::nullopt;
+          uint32_t close_b =
+              ts_node_end_byte(dtype) > 0 ? ts_node_end_byte(dtype) - 1 : 0;
+          auto closing_line =
+              make_closing_line_edit(bs, close_b, header_col, '}');
+          return format_align_rows(env, bs, rows, base_col, false, true,
+                                   align_dim, align_sub_dim, closing_line,
+                                   opening_line);
+        }
       }
     }
 

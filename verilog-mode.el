@@ -5811,9 +5811,13 @@ Return a list of two elements: (INDENT-TYPE INDENT-LEVEL)."
                                  (beginning-of-line)
                                  (skip-chars-forward " \t")
                                  (throw 'nesting 'constraint)))
-                           (if (and begin
-                                    (not verilog-indent-begin-after-if)
-                                    (looking-at verilog-no-indent-begin-re))
+                           (if (or (and begin
+                                        (not verilog-indent-begin-after-if)
+                                        (looking-at verilog-no-indent-begin-re))
+                                   (save-excursion
+                                     (goto-char starting_position)
+                                     (or (verilog-at-struct-p)
+                                         (verilog-at-enum-p))))
                                (progn
                                  (beginning-of-line)
                                  (skip-chars-forward " \t")
