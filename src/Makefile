@@ -34,10 +34,10 @@ TARGET := verilog-ts-core.so
 all: $(TARGET)
 
 $(TS_LIB):
-	$(MAKE) -C $(TS_DIR) CFLAGS="$(CFLAGS)" libtree-sitter.a
+	$(MAKE) -C $(TS_DIR) CC="$(CC)" CFLAGS="$(CFLAGS)" libtree-sitter.a
 
 $(TSSV_LIB):
-	$(MAKE) -C $(TSSV_DIR) CFLAGS="$(CFLAGS)" libtree-sitter-systemverilog.a
+	$(MAKE) -C $(TSSV_DIR) CC="$(CC)" CFLAGS="$(CFLAGS)" libtree-sitter-systemverilog.a
 
 %.o: %.cpp verilog_ts_common.hpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
