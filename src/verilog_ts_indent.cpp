@@ -183,7 +183,7 @@ emacs_value Fverilog_ts_decl_align_info(emacs_env *env, ptrdiff_t nargs,
     if (nt == "data_declaration" || nt == "net_declaration" ||
         nt == "port_declaration" || nt == "ansi_port_declaration" ||
         nt == "parameter_declaration" || nt == "local_parameter_declaration" ||
-        nt == "tf_port_item") {
+        nt == "tf_port_item" || nt == "class_property") {
       std::string_view text = bs.node_text(cur);
       if (text.find("struct") != std::string_view::npos ||
           text.find("union") != std::string_view::npos ||
@@ -422,6 +422,10 @@ TSNode find_decl_assign_list_child(TSNode node) {
         ct == "list_of_net_decl_assignments") {
       return ch;
     }
+    if (ct == "data_declaration" || ct == "net_declaration") {
+      TSNode sub = find_decl_assign_list_child(ch);
+      if (!ts_node_is_null(sub)) return sub;
+    }
   }
   return {};
 }
@@ -447,9 +451,11 @@ bool has_compound_type_descendant(TSNode node, uint32_t limit_byte) {
 
 bool parse_decl_or_member_row(const BufferState &bs, TSNode node,
                               AlignRow &row) {
-  uint32_t sb = ts_node_start_byte(node);
-  uint32_t eb = ts_node_end_byte(node);
-  if (bs.byte_to_line(sb) != bs.byte_to_line(eb)) return false;
+  uint32_t raw_sb = ts_node_start_byte(node);
+  uint32_t raw_eb = ts_node_end_byte(node);
+  uint32_t sb = forward_syntactic_ws_bytes(bs, raw_sb, raw_eb, true);
+  uint32_t eb = backward_syntactic_ws_bytes(bs, raw_eb, sb, true);
+  if (sb >= eb || bs.byte_to_line(sb) != bs.byte_to_line(eb)) return false;
 
   TSNode assign_list = find_decl_assign_list_child(node);
   if (ts_node_is_null(assign_list)) return false;
@@ -489,9 +495,11 @@ bool parse_decl_or_member_row(const BufferState &bs, TSNode node,
 }
 
 bool parse_ansi_port_row(const BufferState &bs, TSNode pnode, AlignRow &row) {
-  uint32_t sb = ts_node_start_byte(pnode);
-  uint32_t eb = ts_node_end_byte(pnode);
-  if (bs.byte_to_line(sb) != bs.byte_to_line(eb)) return false;
+  uint32_t raw_sb = ts_node_start_byte(pnode);
+  uint32_t raw_eb = ts_node_end_byte(pnode);
+  uint32_t sb = forward_syntactic_ws_bytes(bs, raw_sb, raw_eb, true);
+  uint32_t eb = backward_syntactic_ws_bytes(bs, raw_eb, sb, true);
+  if (sb >= eb || bs.byte_to_line(sb) != bs.byte_to_line(eb)) return false;
 
   uint32_t line_sb = bs.line_start_byte(sb);
   uint32_t line_eb = bs.line_end_byte(eb);
@@ -502,6 +510,60 @@ bool parse_ansi_port_row(const BufferState &bs, TSNode pnode, AlignRow &row) {
   }
   if (first_nb != sb) return false;
 
+  // Workaround for tree-sitter-systemverilog GLR ambiguity on
+  // `input user_type_t [D1] [D2] port_name` inside `tf_port_list`, where
+  // `user_type_t` is parsed as `name` of `tf_port_item`, `[D1] [D2]` as
+  // `unpacked_dimension`, and `port_name` as a trailing `(ERROR ...)` on the
+  // same line.
+  uint32_t after_pnode = raw_eb;
+  while (after_pnode < line_eb &&
+         (bs.text[after_pnode] == ' ' || bs.text[after_pnode] == '\t')) {
+    ++after_pnode;
+  }
+  if (std::string_view(ts_node_type(pnode)) == "tf_port_item" &&
+      after_pnode < line_eb &&
+      (std::isalpha(static_cast<unsigned char>(bs.text[after_pnode])) ||
+       bs.text[after_pnode] == '_' || bs.text[after_pnode] == '\\') &&
+      ts_node_is_null(
+          find_descendant_of_type(pnode, "data_type_or_implicit", raw_eb))) {
+    uint32_t id_sb = after_pnode;
+    TSNode dir_node =
+        find_descendant_of_type(pnode, "tf_port_direction", id_sb);
+    if (ts_node_is_null(dir_node)) {
+      dir_node = find_descendant_of_type(pnode, "port_direction", id_sb);
+    }
+    std::string dir_str;
+    uint32_t after_dir_b = sb;
+    if (!ts_node_is_null(dir_node) && ts_node_start_byte(dir_node) >= sb) {
+      dir_str = normalize_ws_indent(bs.node_text(dir_node));
+      after_dir_b = ts_node_end_byte(dir_node);
+    }
+    std::vector<TSNode> ud_nodes;
+    uint32_t pcount = ts_node_child_count(pnode);
+    for (uint32_t i = 0; i < pcount; ++i) {
+      TSNode ch = ts_node_child(pnode, i);
+      std::string_view ct = ts_node_type(ch);
+      if (ct == "unpacked_dimension" || ct == "packed_dimension") {
+        ud_nodes.push_back(ch);
+      }
+    }
+    uint32_t type_end_b =
+        ud_nodes.empty() ? id_sb : ts_node_start_byte(ud_nodes.front());
+    std::string type_str =
+        normalize_ws_indent(bs.slice(after_dir_b, type_end_b));
+    row.line_sb = line_sb;
+    row.line_eb = line_eb;
+    row.first_nb = first_nb;
+    row.dir_str = std::move(dir_str);
+    row.type_str = std::move(type_str);
+    row.packed_dims.clear();
+    for (TSNode ud : ud_nodes) {
+      row.packed_dims.push_back(trim_ws_indent(bs.node_text(ud)));
+    }
+    row.rest_str = trim_ws_indent(bs.slice(id_sb, line_eb));
+    return !row.rest_str.empty();
+  }
+
   TSNode name_node = ts_node_child_by_field_name(pnode, "port_name", 9);
   if (ts_node_is_null(name_node)) {
     name_node = ts_node_child_by_field_name(pnode, "name", 4);
@@ -511,8 +573,9 @@ bool parse_ansi_port_row(const BufferState &bs, TSNode pnode, AlignRow &row) {
     for (uint32_t i = count; i > 0; --i) {
       TSNode ch = ts_node_child(pnode, i - 1);
       std::string_view ct = ts_node_type(ch);
-      if (ct == "simple_identifier" || ct == "escaped_identifier" ||
-          ct == "port_identifier") {
+      if ((ct == "simple_identifier" || ct == "escaped_identifier" ||
+           ct == "port_identifier") &&
+          ts_node_start_byte(ch) >= sb) {
         name_node = ch;
         break;
       }
@@ -529,7 +592,7 @@ bool parse_ansi_port_row(const BufferState &bs, TSNode pnode, AlignRow &row) {
   }
   std::string dir_str;
   uint32_t after_dir_b = sb;
-  if (!ts_node_is_null(dir_node)) {
+  if (!ts_node_is_null(dir_node) && ts_node_start_byte(dir_node) >= sb) {
     dir_str = normalize_ws_indent(bs.node_text(dir_node));
     after_dir_b = ts_node_end_byte(dir_node);
   }
@@ -555,9 +618,11 @@ bool parse_ansi_port_row(const BufferState &bs, TSNode pnode, AlignRow &row) {
 }
 
 bool parse_inst_port_row(const BufferState &bs, TSNode cnode, AlignRow &row) {
-  uint32_t sb = ts_node_start_byte(cnode);
-  uint32_t eb = ts_node_end_byte(cnode);
-  if (bs.byte_to_line(sb) != bs.byte_to_line(eb)) return false;
+  uint32_t raw_sb = ts_node_start_byte(cnode);
+  uint32_t raw_eb = ts_node_end_byte(cnode);
+  uint32_t sb = forward_syntactic_ws_bytes(bs, raw_sb, raw_eb, true);
+  uint32_t eb = backward_syntactic_ws_bytes(bs, raw_eb, sb, true);
+  if (sb >= eb || bs.byte_to_line(sb) != bs.byte_to_line(eb)) return false;
 
   uint32_t line_sb = bs.line_start_byte(sb);
   uint32_t line_eb = bs.line_end_byte(eb);
@@ -569,12 +634,14 @@ bool parse_inst_port_row(const BufferState &bs, TSNode cnode, AlignRow &row) {
   if (first_nb != sb || bs.text[sb] != '.') return false;
 
   TSNode pname = ts_node_child_by_field_name(cnode, "port_name", 9);
-  if (ts_node_is_null(pname)) {
+  if (ts_node_is_null(pname) || ts_node_start_byte(pname) < sb) {
+    pname = {};
     uint32_t ccount = ts_node_child_count(cnode);
     for (uint32_t i = 0; i < ccount; ++i) {
       TSNode ch = ts_node_child(cnode, i);
       std::string_view ct = ts_node_type(ch);
-      if (ct == "simple_identifier" || ct == "escaped_identifier") {
+      if ((ct == "simple_identifier" || ct == "escaped_identifier") &&
+          ts_node_start_byte(ch) >= sb) {
         pname = ch;
         break;
       }
@@ -621,19 +688,22 @@ bool parse_inst_port_row(const BufferState &bs, TSNode cnode, AlignRow &row) {
 TSNode find_single_line_decl_at_byte(const BufferState &bs, TSNode root,
                                      uint32_t nb) {
   TSNode cur = ts_node_descendant_for_byte_range(root, nb, nb);
+  TSNode best = {};
   while (!ts_node_is_null(cur)) {
     std::string_view nt = ts_node_type(cur);
-    if (nt == "data_declaration" || nt == "net_declaration") {
-      if (ts_node_start_byte(cur) == nb &&
-          bs.byte_to_line(ts_node_start_byte(cur)) ==
-              bs.byte_to_line(ts_node_end_byte(cur))) {
-        return cur;
+    if (nt == "data_declaration" || nt == "net_declaration" ||
+        nt == "class_property") {
+      uint32_t sb = forward_syntactic_ws_bytes(
+          bs, ts_node_start_byte(cur), ts_node_end_byte(cur), true);
+      uint32_t eb = backward_syntactic_ws_bytes(
+          bs, ts_node_end_byte(cur), sb, true);
+      if (sb == nb && bs.byte_to_line(sb) == bs.byte_to_line(eb)) {
+        best = cur;
       }
-      return {};
     }
     cur = ts_node_parent(cur);
   }
-  return {};
+  return best;
 }
 
 emacs_value format_align_rows(
@@ -850,35 +920,31 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
   uint32_t byte = bs.pos_to_byte(pos);
   uint32_t ls = bs.line_start_byte(byte);
   uint32_t le = bs.line_end_byte(byte);
-  uint32_t first_nb = ls;
-  while (first_nb < le &&
-         (bs.text[first_nb] == ' ' || bs.text[first_nb] == '\t')) {
-    ++first_nb;
+  uint32_t raw_nb = ls;
+  while (raw_nb < le &&
+         (bs.text[raw_nb] == ' ' || bs.text[raw_nb] == '\t')) {
+    ++raw_nb;
   }
+  if (raw_nb >= le) return elisp_nil(env);
+  uint32_t first_nb = forward_syntactic_ws_bytes(bs, ls, n, true);
   if (first_nb >= le) return elisp_nil(env);
-  if (bs.text[first_nb] == '`' ||
-      bs.slice(first_nb, le).rfind("//", 0) == 0 ||
-      bs.slice(first_nb, le).rfind("/*", 0) == 0 ||
-      bs.find_span_at_byte(first_nb, true) != nullptr) {
-    return elisp_nil(env);
-  }
 
   TSNode root = ts_tree_root_node(bs.tree);
   uint32_t probe_b = first_nb;
   uint32_t open_paren_at_line = n;
   if (bs.text[first_nb] == ')') {
-    uint32_t prev = backward_syntactic_ws_bytes(bs, first_nb, 0, false);
+    uint32_t prev = backward_syntactic_ws_bytes(bs, first_nb, 0, true);
     if (prev > 0) probe_b = prev - 1;
   } else if (bs.text[first_nb] == '(') {
     open_paren_at_line = first_nb;
-    uint32_t next = forward_syntactic_ws_bytes(bs, first_nb + 1, n, false);
+    uint32_t next = forward_syntactic_ws_bytes(bs, first_nb + 1, n, true);
     if (next < n) probe_b = next;
   } else if (bs.text[first_nb] == '#') {
     uint32_t p = first_nb + 1;
     while (p < le && (bs.text[p] == ' ' || bs.text[p] == '\t')) ++p;
     if (p < le && bs.text[p] == '(') {
       open_paren_at_line = p;
-      uint32_t next = forward_syntactic_ws_bytes(bs, p + 1, n, false);
+      uint32_t next = forward_syntactic_ws_bytes(bs, p + 1, n, true);
       if (next < n) probe_b = next;
     }
   }
@@ -891,12 +957,28 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
     if (nt == "list_of_port_declarations" || nt == "tf_port_list" ||
         nt == "class_constructor_arg_list") {
       uint32_t open_b = n;
+      uint32_t close_b = n;
       if (nt == "list_of_port_declarations") {
-        open_b = ts_node_start_byte(walk);
+        uint32_t pcount = ts_node_child_count(walk);
+        for (uint32_t i = 0; i < pcount; ++i) {
+          TSNode ch = ts_node_child(walk, i);
+          std::string_view ct = ts_node_type(ch);
+          if (ct == "(" && open_b == n) {
+            open_b = ts_node_start_byte(ch);
+          } else if (ct == ")") {
+            close_b = ts_node_start_byte(ch);
+          }
+        }
+        if (open_b == n) open_b = ts_node_start_byte(walk);
+        if (close_b == n) {
+          close_b = ts_node_end_byte(walk) > 0 ? ts_node_end_byte(walk) - 1 : 0;
+        }
       } else {
         uint32_t prev =
-            backward_syntactic_ws_bytes(bs, ts_node_start_byte(walk), 0, false);
+            backward_syntactic_ws_bytes(bs, ts_node_start_byte(walk), 0, true);
         if (prev > 0 && bs.text[prev - 1] == '(') open_b = prev - 1;
+        close_b =
+            forward_syntactic_ws_bytes(bs, ts_node_end_byte(walk), n, true);
       }
       if (open_paren_at_line < n && open_paren_at_line != open_b) {
         return elisp_nil(env);
@@ -941,6 +1023,10 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
         }
       }
       if (rows.empty()) return elisp_nil(env);
+      if (nt != "list_of_port_declarations" &&
+          rows.back().line_eb > ts_node_end_byte(walk)) {
+        close_b = forward_syntactic_ws_bytes(bs, rows.back().line_eb, n, true);
+      }
       uint32_t header_nb = header_sb;
       while (header_nb < n &&
              (bs.text[header_nb] == ' ' || bs.text[header_nb] == '\t')) {
@@ -953,10 +1039,6 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
       auto opening_line =
           (open_b < n) ? make_closing_line_edit(bs, open_b, header_col, '(')
                        : std::nullopt;
-      uint32_t close_b =
-          (nt == "tf_port_list" || nt == "class_constructor_arg_list")
-              ? forward_syntactic_ws_bytes(bs, ts_node_end_byte(walk), n, false)
-              : (ts_node_end_byte(walk) > 0 ? ts_node_end_byte(walk) - 1 : 0);
       auto closing_line = make_closing_line_edit(bs, close_b, header_col, ')');
       return format_align_rows(env, bs, rows, base_col, false, true, align_dim,
                                align_sub_dim, closing_line, opening_line);
@@ -979,15 +1061,22 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
       if (!ts_node_is_null(dtype)) {
         bool has_struct_union = false;
         uint32_t open_b = n;
+        uint32_t close_b = n;
         uint32_t count = ts_node_child_count(dtype);
         for (uint32_t i = 0; i < count; ++i) {
           TSNode ch = ts_node_child(dtype, i);
           std::string_view ct = ts_node_type(ch);
           if (ct == "struct_union") {
             has_struct_union = true;
-          } else if (ct == "{") {
+          } else if (ct == "{" && open_b == n) {
             open_b = ts_node_start_byte(ch);
+          } else if (ct == "}") {
+            close_b = ts_node_start_byte(ch);
           }
+        }
+        if (close_b == n) {
+          close_b =
+              ts_node_end_byte(dtype) > 0 ? ts_node_end_byte(dtype) - 1 : 0;
         }
         if (has_struct_union) {
           uint32_t header_sb = bs.line_start_byte(ts_node_start_byte(dtype));
@@ -1015,8 +1104,6 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
               (open_b < n)
                   ? make_closing_line_edit(bs, open_b, header_col, '{')
                   : std::nullopt;
-          uint32_t close_b =
-              ts_node_end_byte(dtype) > 0 ? ts_node_end_byte(dtype) - 1 : 0;
           auto closing_line =
               make_closing_line_edit(bs, close_b, header_col, '}');
           return format_align_rows(env, bs, rows, base_col, false, true,
@@ -1031,7 +1118,7 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
         nt == "list_of_checker_port_connections" ||
         nt == "list_of_parameter_value_assignments") {
       uint32_t prev_b =
-          backward_syntactic_ws_bytes(bs, ts_node_start_byte(walk), 0, false);
+          backward_syntactic_ws_bytes(bs, ts_node_start_byte(walk), 0, true);
       uint32_t open_b =
           (prev_b > 0 && bs.text[prev_b - 1] == '(') ? (prev_b - 1) : n;
       if (open_paren_at_line < n && open_paren_at_line != open_b) {
@@ -1081,7 +1168,7 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
           (open_b < n) ? make_closing_line_edit(bs, open_b, header_col, '(')
                        : std::nullopt;
       uint32_t close_b =
-          forward_syntactic_ws_bytes(bs, ts_node_end_byte(walk), n, false);
+          forward_syntactic_ws_bytes(bs, ts_node_end_byte(walk), n, true);
       auto closing_line = make_closing_line_edit(bs, close_b, header_col, ')');
       return format_align_rows(env, bs, rows, base_col, true, false, align_dim,
                                align_sub_dim, closing_line, opening_line);
@@ -1104,14 +1191,15 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
     --l;
     uint32_t l_sb = bs.line_starts[l];
     uint32_t l_eb = bs.line_end_byte(l_sb);
-    uint32_t nb = l_sb;
-    while (nb < l_eb && (bs.text[nb] == ' ' || bs.text[nb] == '\t')) ++nb;
-    if (nb >= l_eb) break; // Blank line ends block
-    std::string_view line_sv = bs.slice(nb, l_eb);
-    if (line_sv.rfind("//", 0) == 0 ||
-        (line_sv.rfind("/*", 0) == 0 &&
-         line_sv.find("*/") != std::string_view::npos)) {
-      continue; // Allow single-line comments inside declaration block
+    uint32_t raw_l_nb = l_sb;
+    while (raw_l_nb < l_eb &&
+           (bs.text[raw_l_nb] == ' ' || bs.text[raw_l_nb] == '\t')) {
+      ++raw_l_nb;
+    }
+    if (raw_l_nb >= l_eb) break; // Blank line ends block
+    uint32_t nb = forward_syntactic_ws_bytes(bs, l_sb, n, true);
+    if (nb >= l_eb) {
+      continue; // Allow comments and preprocessor directives inside declaration block
     }
     TSNode dnode = find_single_line_decl_at_byte(bs, root, nb);
     if (ts_node_is_null(dnode)) break;
@@ -1130,13 +1218,14 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
   for (uint32_t l = cur_line_idx + 1; l < total_lines; ++l) {
     uint32_t l_sb = bs.line_starts[l];
     uint32_t l_eb = bs.line_end_byte(l_sb);
-    uint32_t nb = l_sb;
-    while (nb < l_eb && (bs.text[nb] == ' ' || bs.text[nb] == '\t')) ++nb;
-    if (nb >= l_eb) break; // Blank line ends block
-    std::string_view line_sv = bs.slice(nb, l_eb);
-    if (line_sv.rfind("//", 0) == 0 ||
-        (line_sv.rfind("/*", 0) == 0 &&
-         line_sv.find("*/") != std::string_view::npos)) {
+    uint32_t raw_l_nb = l_sb;
+    while (raw_l_nb < l_eb &&
+           (bs.text[raw_l_nb] == ' ' || bs.text[raw_l_nb] == '\t')) {
+      ++raw_l_nb;
+    }
+    if (raw_l_nb >= l_eb) break; // Blank line ends block
+    uint32_t nb = forward_syntactic_ws_bytes(bs, l_sb, n, true);
+    if (nb >= l_eb) {
       continue;
     }
     TSNode dnode = find_single_line_decl_at_byte(bs, root, nb);

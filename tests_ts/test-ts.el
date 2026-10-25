@@ -586,6 +586,80 @@
                                "    );\n"
                                "        return 1'b0;\n"
                                "    endfunction\n"
+                               "endmodule\n")))))
+
+    ;; 1.9 Verify mixed preprocessor directives (`ifdef/`else/`endif/`include) and comments
+    (with-temp-buffer
+      (let ((indent-tabs-mode nil)
+            (verilog-indent-lists nil)
+            (verilog-indent-level 4)
+            (verilog-indent-level-module 4)
+            (verilog-indent-level-declaration 4)
+            (verilog-indent-level-behavioral 4)
+            (verilog-cexp-indent 4)
+            (verilog-case-indent 4)
+            (verilog-align-decl-dimension t)
+            (verilog-align-decl-sub-dimension t)
+            (verilog-auto-lineup-on-semi nil))
+        (verilog-mode)
+        (setq-local indent-tabs-mode nil)
+        (insert "module mix_dir_cmt\n"
+                "     (\n"
+                "  input logic clk,\n"
+                "`ifdef WIDE_PORT\n"
+                "   /* multi-line\n"
+                "      comment */\n"
+                "     output logic [3:0] [15:0] data_o\n"
+                "`else\n"
+                "  output logic [15:0] data_o\n"
+                "`endif\n"
+                "  );\n"
+                "    function automatic logic fn_test\n"
+                "         (\n"
+                "   input logic [7:0] a,\n"
+                "`ifdef EXT_ARG\n"
+                "       input pkt_t [1:0] [7:0] b\n"
+                "`else\n"
+                "  input logic [7:0] b\n"
+                "`endif\n"
+                "        );\n"
+                "      logic [3:0] [7:0] local_a;\n"
+                "`ifdef EXT_ARG\n"
+                "         logic [15:0] local_b;\n"
+                "`endif\n"
+                "    logic local_c;\n"
+                "        return local_c;\n"
+                "    endfunction\n"
+                "endmodule\n")
+        (indent-region (point-min) (point-max) nil)
+        (should (equal (buffer-string)
+                       (concat "module mix_dir_cmt\n"
+                               "(\n"
+                               "    input  logic              clk,\n"
+                               "`ifdef WIDE_PORT\n"
+                               "    /* multi-line\n"
+                               "     comment */\n"
+                               "    output logic [3:0] [15:0] data_o\n"
+                               "`else\n"
+                               "    output logic       [15:0] data_o\n"
+                               "`endif\n"
+                               ");\n"
+                               "    function automatic logic fn_test\n"
+                               "    (\n"
+                               "        input logic       [7:0] a,\n"
+                               "`ifdef EXT_ARG\n"
+                               "        input pkt_t [1:0] [7:0] b\n"
+                               "`else\n"
+                               "        input logic       [7:0] b\n"
+                               "`endif\n"
+                               "    );\n"
+                               "        logic [3:0] [7:0]  local_a;\n"
+                               "`ifdef EXT_ARG\n"
+                               "        logic       [15:0] local_b;\n"
+                               "`endif\n"
+                               "        logic              local_c;\n"
+                               "        return local_c;\n"
+                               "    endfunction\n"
                                "endmodule\n")))))))
 
 (provide 'test-ts)

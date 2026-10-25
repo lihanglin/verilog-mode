@@ -57,6 +57,147 @@ TSParser *ensure_parser() {
   return g_parser;
 }
 
+bool is_id_c(char c) {
+  unsigned char uc = static_cast<unsigned char>(c);
+  return std::isalnum(uc) || c == '_' || c == '$';
+}
+
+bool is_followed_by_decl_ident_on_line(const BufferState &bs, uint32_t pos,
+                                       uint32_t line_end) {
+  uint32_t p = pos;
+  while (p < line_end) {
+    while (p < line_end && (bs.text[p] == ' ' || bs.text[p] == '\t')) ++p;
+    if (p >= line_end) return false;
+    if (bs.text[p] == '[') {
+      int depth = 1;
+      ++p;
+      while (p < line_end && depth > 0) {
+        if (bs.text[p] == '[')
+          ++depth;
+        else if (bs.text[p] == ']')
+          --depth;
+        ++p;
+      }
+      continue;
+    }
+    uint32_t ws = p;
+    while (p < line_end && is_id_c(bs.text[p])) ++p;
+    if (p > ws) {
+      std::string_view w = bs.slice(ws, p);
+      if (w == "signed" || w == "unsigned") continue;
+      return !is_verilog_keyword(w);
+    }
+    return false;
+  }
+  return false;
+}
+
+bool should_insert_comma_for_branch(const BufferState &bs, uint32_t ls,
+                                    uint32_t dir_end) {
+  uint32_t n = static_cast<uint32_t>(bs.text.size());
+  uint32_t prev_b = backward_syntactic_ws_bytes(bs, ls, 0, true);
+  uint32_t next_b = forward_syntactic_ws_bytes(bs, dir_end, n, true);
+  if (prev_b == 0 || next_b >= n) return false;
+
+  char prev_c = bs.text[prev_b - 1];
+  if (prev_c == ',' || prev_c == ';' || prev_c == '(' || prev_c == '{' ||
+      prev_c == ':') {
+    return false;
+  }
+
+  uint32_t pw_s = prev_b;
+  while (pw_s > 0 && is_id_c(bs.text[pw_s - 1])) --pw_s;
+  if (pw_s < prev_b) {
+    std::string_view prev_w = bs.slice(pw_s, prev_b);
+    static const std::unordered_set<std::string_view> kBlockKw = {
+        "begin",        "end",         "endfunction", "endtask",
+        "endmodule",    "endclass",    "endinterface","endpackage",
+        "endprogram",   "endgenerate", "endcase",     "else",
+        "join",         "join_any",    "join_none"};
+    if (kBlockKw.count(prev_w) > 0) return false;
+  }
+
+  if (bs.text[next_b] == '.') return true;
+
+  uint32_t nw_s = (bs.text[next_b] == '`') ? (next_b + 1) : next_b;
+  uint32_t nw_e = nw_s;
+  while (nw_e < n && is_id_c(bs.text[nw_e])) ++nw_e;
+  if (nw_e == nw_s) return false;
+  std::string_view next_w = bs.slice(next_b, nw_e);
+
+  static const std::unordered_set<std::string_view> kPortDeclKw = {
+      "input",      "output",   "inout",      "ref",      "parameter",
+      "localparam", "type",     "logic",      "bit",      "reg",
+      "wire",       "int",      "integer",    "byte",     "shortint",
+      "longint",    "string",   "real",       "shortreal","realtime",
+      "time",       "chandle",  "event",      "const",    "var",
+      "tri",        "tri0",     "tri1",       "wand",     "wor",
+      "uwire",      "supply0",  "supply1"};
+  if (kPortDeclKw.count(next_w) > 0) return true;
+
+  if (!is_verilog_keyword(next_w)) {
+    uint32_t next_le = bs.line_end_byte(next_b);
+    if (is_followed_by_decl_ident_on_line(bs, nw_e, next_le)) return true;
+  }
+  return false;
+}
+
+TSTree *parse_tree_for_buffer(const BufferState &bs) {
+  TSParser *parser = ensure_parser();
+  std::string parse_text = bs.text;
+  uint32_t n = static_cast<uint32_t>(parse_text.size());
+
+  for (size_t li = 0; li < bs.line_starts.size(); ++li) {
+    uint32_t ls = bs.line_starts[li];
+    if (bs.is_inside_comment_or_string_byte(ls, true) ||
+        bs.is_inside_protected_byte(ls)) {
+      continue;
+    }
+    uint32_t dir_end = 0;
+    uint32_t tick_pos = 0;
+    std::string_view dir_name;
+    if (is_directive_line_start(bs, ls, &dir_end, &dir_name, &tick_pos)) {
+      if (dir_name == "protected" || dir_name == "endprotected") continue;
+      bool insert_comma =
+          (dir_name == "else" || dir_name == "elsif") &&
+          should_insert_comma_for_branch(bs, ls, dir_end);
+      for (uint32_t k = ls; k < dir_end && k < n; ++k) {
+        if (parse_text[k] != '\n' && parse_text[k] != '\r') {
+          const CommentStringSpan *sp = bs.find_span_at_byte(k, false);
+          if (sp && sp->kind == SpanKind::BLOCK_COMMENT &&
+              sp->end_byte > dir_end) {
+            break;
+          }
+          parse_text[k] = ' ';
+        }
+      }
+      if (insert_comma && tick_pos < n) {
+        parse_text[tick_pos] = ',';
+      }
+      while (li + 1 < bs.line_starts.size() &&
+             bs.line_starts[li + 1] < dir_end) {
+        ++li;
+      }
+    } else {
+      uint32_t le = bs.line_end_byte(ls);
+      for (uint32_t k = ls; k < le; ++k) {
+        if (bs.text[k] == '`' &&
+            !bs.is_inside_comment_or_string_byte(k, false)) {
+          uint32_t m_s = k + 1;
+          uint32_t m_e = m_s;
+          while (m_e < le && is_id_c(bs.text[m_e])) ++m_e;
+          if (m_e > m_s && is_followed_by_decl_ident_on_line(bs, m_e, le)) {
+            parse_text[k] = '_';
+          }
+          k = m_e;
+        }
+      }
+    }
+  }
+
+  return ts_parser_parse_string(parser, nullptr, parse_text.data(), n);
+}
+
 const std::unordered_set<std::string_view> &verilog_keyword_set() {
   static const std::unordered_set<std::string_view> kKeywords = {
       "`begin_keywords", "`celldefine", "`default_nettype", "`define",
@@ -209,9 +350,7 @@ BufferState &get_buffer_state(emacs_env *env, bool need_tree) {
       if (bs.chars_modified_tick == tick && bs.point_min == pmin &&
           bs.point_max == pmax) {
         if (need_tree && bs.tree == nullptr) {
-          TSParser *parser = ensure_parser();
-          bs.tree = ts_parser_parse_string(parser, nullptr, bs.text.data(),
-                                           static_cast<uint32_t>(bs.text.size()));
+          bs.tree = parse_tree_for_buffer(bs);
         }
         return bs;
       }
@@ -248,12 +387,10 @@ BufferState &get_buffer_state(emacs_env *env, bool need_tree) {
         ts_tree_delete(bs.tree);
         bs.tree = nullptr;
       }
-      if (need_tree) {
-        TSParser *parser = ensure_parser();
-        bs.tree = ts_parser_parse_string(parser, nullptr, bs.text.data(),
-                                         static_cast<uint32_t>(bs.text.size()));
-      }
       build_buffer_spans(bs);
+      if (need_tree) {
+        bs.tree = parse_tree_for_buffer(bs);
+      }
       return bs;
     }
   }
@@ -296,12 +433,10 @@ BufferState &get_buffer_state(emacs_env *env, bool need_tree) {
     }
   }
 
-  if (need_tree) {
-    TSParser *parser = ensure_parser();
-    bs.tree = ts_parser_parse_string(parser, nullptr, bs.text.data(),
-                                     static_cast<uint32_t>(bs.text.size()));
-  }
   build_buffer_spans(bs);
+  if (need_tree) {
+    bs.tree = parse_tree_for_buffer(bs);
+  }
   return bs;
 }
 

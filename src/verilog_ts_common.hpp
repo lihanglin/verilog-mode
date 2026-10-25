@@ -281,6 +281,10 @@ emacs_value make_node_plist(emacs_env *env, const BufferState &bs, TSNode node,
 
 // Scanner & syntactic whitespace helpers (implemented in verilog_ts_scan.cpp)
 void build_buffer_spans(BufferState &bs);
+bool is_directive_line_start(const BufferState &bs, uint32_t ls_byte,
+                             uint32_t *dir_end_out = nullptr,
+                             std::string_view *dir_name_out = nullptr,
+                             uint32_t *tick_byte_out = nullptr);
 uint32_t forward_syntactic_ws_bytes(const BufferState &bs, uint32_t byte,
                                     uint32_t bound_byte,
                                     bool skip_directives = false);

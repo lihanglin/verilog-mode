@@ -4661,7 +4661,8 @@ Uses `verilog-scan' cache."
 		(progn
 		  (verilog-backward-token)
                   (or (looking-at verilog-ends-re)
-                      (looking-at "begin"))))
+                      (looking-at "begin")
+                      (verilog-in-directive-p))))
             (progn
               (goto-char pt)
               (throw 'done t)))))
@@ -5811,14 +5812,19 @@ Return a list of two elements: (INDENT-TYPE INDENT-LEVEL)."
                                (decl-hdr-re
                                 "^[ \t]*\\(\\(?:virtual[ \t]+\\|protected[ \t]+\\|local[ \t]+\\|extern[ \t]+\\|pure[ \t]+\\)*\\(?:function\\|task\\|class\\)\\|import[ \t]+\"DPI\\(?:-C\\)?\"[ \t]+\\(?:context[ \t]+\\|pure[ \t]+\\)*\\(?:function\\|task\\)\\|module\\|macromodule\\|interface\\|program\\)\\>")
                                (inst-param-hdr-re
-                                "^[ \t]*[a-zA-Z_\\][a-zA-Z0-9_$:]*\\(?:[ \t]+#\\)?[ \t]*\\(?://.*\\|/\\*.*\\*/[ \t]*\\)?$"))
+                                "^[ \t]*[a-zA-Z_\\][a-zA-Z0-9_$:]*\\(?:[ \t]+#\\)?[ \t]*\\(?://.*\\|/\\*.*\\*/[ \t]*\\)?$")
+                               (inst-port-hdr-re
+                                "^[ \t]*[a-zA-Z_\\][a-zA-Z0-9_$:]*\\(?:[ \t]+[a-zA-Z_\\][a-zA-Z0-9_$:]*\\)?[ \t]*\\(?://.*\\|/\\*.*\\*/[ \t]*\\)?$"))
                            (if (and at-open-paren
                                     (save-excursion
                                       (beginning-of-line)
                                       (or (looking-at decl-hdr-re)
                                           (and (or at-hash-paren
                                                    (eq (char-after sp) ?#))
-                                               (looking-at inst-param-hdr-re)))))
+                                               (looking-at inst-param-hdr-re))
+                                          (and (not verilog-indent-lists)
+                                               (not at-hash-paren)
+                                               (looking-at inst-port-hdr-re)))))
                                (progn
                                  (beginning-of-line)
                                  (skip-chars-forward " \t")
@@ -6141,7 +6147,8 @@ of the appropriate enclosing block."
       (beginning-of-line)
       (while (and (< base 0)
 		  (verilog-re-search-backward verilog-directive-re nil t))
-	(cond ((save-excursion (skip-chars-backward " \t") (bolp))
+	(cond ((and (save-excursion (skip-chars-backward " \t") (bolp))
+		    (not (and (looking-at "`include\\>") (verilog-in-paren))))
 	       (setq base (current-indentation))))
         (cond ((and (looking-at verilog-directive-end) (< base 0))  ; Only matters when not at BOL
 	       (setq ind (- ind verilog-indent-level-directive)))

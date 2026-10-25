@@ -18,47 +18,6 @@ bool match_word_at(std::string_view text, uint32_t pos, std::string_view word) {
   return true;
 }
 
-bool is_directive_line_start(const BufferState &bs, uint32_t ls_byte,
-                             uint32_t *dir_end_out = nullptr) {
-  uint32_t n = static_cast<uint32_t>(bs.text.size());
-  uint32_t i = ls_byte;
-  while (i < n && (bs.text[i] == ' ' || bs.text[i] == '\t')) ++i;
-  if (i >= n || bs.text[i] != '`') return false;
-  uint32_t tick_pos = i;
-  ++i;
-  while (i < n && (bs.text[i] == ' ' || bs.text[i] == '\t')) ++i;
-  uint32_t wstart = i;
-  while (i < n && is_ident_char(bs.text[i])) ++i;
-  std::string_view dir = bs.slice(wstart, i);
-  if (dir.empty()) return false;
-
-  static const std::unordered_set<std::string_view> kDirectives = {
-      "define",           "else",          "elsif",
-      "endif",            "ifdef",         "ifndef",
-      "include",          "line",          "timescale",
-      "undef",            "default_nettype", "pragma",
-      "resetall",         "celldefine",    "endcelldefine",
-      "begin_keywords",   "end_keywords",  "unconnected_drive",
-      "nounconnected_drive", "protected",  "endprotected"};
-  if (kDirectives.count(dir) == 0) return false;
-  (void)tick_pos;
-
-  // Find end of directive line (handling backslash newline continuations)
-  uint32_t cur = i;
-  while (cur < n) {
-    uint32_t lend = bs.line_end_byte(cur);
-    bool continued = (lend > cur && bs.text[lend - 1] == '\\');
-    if (lend < n && bs.text[lend] == '\n') {
-      cur = lend + 1;
-    } else {
-      cur = lend;
-    }
-    if (!continued) break;
-  }
-  if (dir_end_out) *dir_end_out = cur;
-  return true;
-}
-
 void scan_slice_for_spans(std::string_view text, uint32_t base_offset,
                           std::vector<CommentStringSpan> &spans,
                           std::vector<CommentStringSpan> &attr_spans,
@@ -176,6 +135,51 @@ void scan_slice_for_spans(std::string_view text, uint32_t base_offset,
 }
 
 } // namespace
+
+bool is_directive_line_start(const BufferState &bs, uint32_t ls_byte,
+                             uint32_t *dir_end_out,
+                             std::string_view *dir_name_out,
+                             uint32_t *tick_byte_out) {
+  uint32_t n = static_cast<uint32_t>(bs.text.size());
+  uint32_t i = ls_byte;
+  while (i < n && (bs.text[i] == ' ' || bs.text[i] == '\t')) ++i;
+  if (i >= n || bs.text[i] != '`') return false;
+  uint32_t tick_pos = i;
+  ++i;
+  while (i < n && (bs.text[i] == ' ' || bs.text[i] == '\t')) ++i;
+  uint32_t wstart = i;
+  while (i < n && is_ident_char(bs.text[i])) ++i;
+  std::string_view dir = bs.slice(wstart, i);
+  if (dir.empty()) return false;
+
+  static const std::unordered_set<std::string_view> kDirectives = {
+      "define",             "else",               "elsif",
+      "endif",              "ifdef",              "ifndef",
+      "include",            "line",               "timescale",
+      "undef",              "undefineall",        "default_nettype",
+      "pragma",             "resetall",           "celldefine",
+      "endcelldefine",      "begin_keywords",     "end_keywords",
+      "unconnected_drive",  "nounconnected_drive", "protected",
+      "endprotected"};
+  if (kDirectives.count(dir) == 0) return false;
+  if (dir_name_out) *dir_name_out = dir;
+  if (tick_byte_out) *tick_byte_out = tick_pos;
+
+  // Find end of directive line (handling backslash newline continuations)
+  uint32_t cur = i;
+  while (cur < n) {
+    uint32_t lend = bs.line_end_byte(cur);
+    bool continued = (lend > cur && bs.text[lend - 1] == '\\');
+    if (lend < n && bs.text[lend] == '\n') {
+      cur = lend + 1;
+    } else {
+      cur = lend;
+    }
+    if (!continued) break;
+  }
+  if (dir_end_out) *dir_end_out = cur;
+  return true;
+}
 
 void build_buffer_spans(BufferState &bs) {
   bs.spans.clear();
