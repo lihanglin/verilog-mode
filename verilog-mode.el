@@ -5770,7 +5770,9 @@ Return a list of two elements: (INDENT-TYPE INDENT-LEVEL)."
 		   (if (save-excursion (beginning-of-line)
 				       (and (looking-at verilog-directive-re-1)
 					    (not (or (looking-at "[ \t]*`[ou]vm_")
-						     (looking-at "[ \t]*`vmm_")))))
+						     (looking-at "[ \t]*`vmm_")
+						     (and (looking-at "[ \t]*`include\\>")
+							  (verilog-in-paren))))))
 		       (throw 'nesting 'directive))
                    ;; indent structs as if there were module level
                    (setq structres (verilog-in-struct-nested-p))
@@ -5801,13 +5803,22 @@ Return a list of two elements: (INDENT-TYPE INDENT-LEVEL)."
                                (at-open-paren
                                 (save-excursion
                                   (goto-char starting_position)
-                                  (looking-at "#?[ \t]*(")))
+                                  (looking-at "#?[ \t]*([ \t]*\\(?://.*\\|/\\*.*\\*/[ \t]*\\)?$")))
+                               (at-hash-paren
+                                (save-excursion
+                                  (goto-char starting_position)
+                                  (looking-at "#[ \t]*([ \t]*\\(?://.*\\|/\\*.*\\*/[ \t]*\\)?$")))
                                (decl-hdr-re
-                                "^[ \t]*\\(\\(?:virtual[ \t]+\\|protected[ \t]+\\|local[ \t]+\\|extern[ \t]+\\|pure[ \t]+\\)*\\(?:function\\|task\\|class\\)\\|import[ \t]+\"DPI\\(?:-C\\)?\"[ \t]+\\(?:context[ \t]+\\|pure[ \t]+\\)*\\(?:function\\|task\\)\\|module\\|macromodule\\|interface\\|program\\)\\>"))
+                                "^[ \t]*\\(\\(?:virtual[ \t]+\\|protected[ \t]+\\|local[ \t]+\\|extern[ \t]+\\|pure[ \t]+\\)*\\(?:function\\|task\\|class\\)\\|import[ \t]+\"DPI\\(?:-C\\)?\"[ \t]+\\(?:context[ \t]+\\|pure[ \t]+\\)*\\(?:function\\|task\\)\\|module\\|macromodule\\|interface\\|program\\)\\>")
+                               (inst-param-hdr-re
+                                "^[ \t]*[a-zA-Z_\\][a-zA-Z0-9_$:]*\\(?:[ \t]+#\\)?[ \t]*\\(?://.*\\|/\\*.*\\*/[ \t]*\\)?$"))
                            (if (and at-open-paren
                                     (save-excursion
                                       (beginning-of-line)
-                                      (looking-at decl-hdr-re)))
+                                      (or (looking-at decl-hdr-re)
+                                          (and (or at-hash-paren
+                                                   (eq (char-after sp) ?#))
+                                               (looking-at inst-param-hdr-re)))))
                                (progn
                                  (beginning-of-line)
                                  (skip-chars-forward " \t")

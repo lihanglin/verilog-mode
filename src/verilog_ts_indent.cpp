@@ -856,6 +856,12 @@ emacs_value Fverilog_ts_align_block(emacs_env *env, ptrdiff_t nargs,
     ++first_nb;
   }
   if (first_nb >= le) return elisp_nil(env);
+  if (bs.text[first_nb] == '`' ||
+      bs.slice(first_nb, le).rfind("//", 0) == 0 ||
+      bs.slice(first_nb, le).rfind("/*", 0) == 0 ||
+      bs.find_span_at_byte(first_nb, true) != nullptr) {
+    return elisp_nil(env);
+  }
 
   TSNode root = ts_tree_root_node(bs.tree);
   uint32_t probe_b = first_nb;
