@@ -778,5 +778,201 @@
         (should (eq (get-text-property (match-beginning 0) 'face)
                     'font-lock-constant-face))))))
 
+(ert-deftest verilog-ts-test-10-enum-param-comment-assign-and-perf ()
+  "Verify enum alignment, parameter/localparam alignment, trailing comment alignment, assignment alignment, and O(1)-per-block indent-region."
+  ;; 1. O(1)-per-block `indent-region': verify `verilog-ts-align-block' is called once per aligned block
+  (with-temp-buffer
+    (let ((indent-tabs-mode nil)
+          (verilog-indent-lists nil)
+          (verilog-indent-level 4)
+          (verilog-indent-level-module 4)
+          (verilog-indent-level-declaration 4)
+          (verilog-indent-level-behavioral 4)
+          (verilog-align-decl-dimension t)
+          (verilog-align-decl-sub-dimension t)
+          (verilog-auto-lineup-on-semi nil)
+          (align-call-count 0))
+      (verilog-mode)
+      (setq-local indent-tabs-mode nil)
+      (insert "module perf_test (\n"
+              "    input logic clk,\n"
+              "    input logic rst_n,\n"
+              "    input logic [7:0] a_i,\n"
+              "    input logic [15:0] b_i,\n"
+              "    output logic [15:0] y_o\n"
+              ");\n"
+              "    logic [7:0] s1;\n"
+              "    logic [15:0] s2;\n"
+              "    logic [3:0] [7:0] s3;\n"
+              "    logic s4;\n"
+              "endmodule\n")
+      (let ((counter-fn (lambda (&rest args)
+                          (let ((res (apply (car args) (cdr args))))
+                            (when res
+                              (setq align-call-count (1+ align-call-count)))
+                            res))))
+        (advice-add 'verilog-ts-align-block :around counter-fn)
+        (unwind-protect
+            (indent-region (point-min) (point-max) nil)
+          (advice-remove 'verilog-ts-align-block counter-fn)))
+      ;; 5-port ANSI header + 4-signal declaration block => 2 block alignments, not 6 + 4 = 10
+      (should (= align-call-count 2))))
+
+  ;; 2. `enum' member alignment (mixed `= val' and bare members + standalone `{` / `}')
+  (with-temp-buffer
+    (let ((indent-tabs-mode nil)
+          (verilog-indent-lists nil)
+          (verilog-indent-level 4)
+          (verilog-indent-level-module 4)
+          (verilog-indent-level-declaration 4)
+          (verilog-align-decl-dimension t)
+          (verilog-auto-lineup-on-semi nil))
+      (verilog-mode)
+      (setq-local indent-tabs-mode nil)
+      (insert "package p;\n"
+              "    typedef enum logic [2:0]\n"
+              "         {\n"
+              "       ST_RESET,\n"
+              "          ST_IDLE = 3'd0,\n"
+              "      ST_DECODE_LONG,\n"
+              "           ST_EXEC = 3'd4\n"
+              "         } state_e;\n"
+              "endpackage\n")
+      (indent-region (point-min) (point-max) nil)
+      (should (equal (buffer-string)
+                     (concat "package p;\n"
+                             "    typedef enum logic [2:0]\n"
+                             "    {\n"
+                             "        ST_RESET,\n"
+                             "        ST_IDLE         = 3'd0,\n"
+                             "        ST_DECODE_LONG,\n"
+                             "        ST_EXEC         = 3'd4\n"
+                             "    } state_e;\n"
+                             "endpackage\n")))))
+
+  ;; 3. `parameter' / `localparam' alignment in `#(...)' header and module body (kept separate from `logic')
+  (with-temp-buffer
+    (let ((indent-tabs-mode nil)
+          (verilog-indent-lists nil)
+          (verilog-indent-level 4)
+          (verilog-indent-level-module 4)
+          (verilog-indent-level-declaration 4)
+          (verilog-align-decl-dimension t)
+          (verilog-align-decl-sub-dimension t)
+          (verilog-auto-lineup-on-semi nil))
+      (verilog-mode)
+      (setq-local indent-tabs-mode nil)
+      (insert "module param_m #(\n"
+              "      parameter int WIDTH = 32,\n"
+              "    parameter logic [3:0] [7:0] MASK = 32'hFF,\n"
+              "       localparam int DEPTH = 1 << WIDTH\n"
+              ") ();\n"
+              "      parameter int P_A = 8;\n"
+              "    localparam logic [1:0] [7:0] LP_B = 16'h1234;\n"
+              "      logic [7:0] sig_a;\n"
+              "    logic sig_b;\n"
+              "endmodule\n")
+      (indent-region (point-min) (point-max) nil)
+      (should (equal (buffer-string)
+                     (concat "module param_m #(\n"
+                             "    parameter  int               WIDTH = 32,\n"
+                             "    parameter  logic [3:0] [7:0] MASK  = 32'hFF,\n"
+                             "    localparam int               DEPTH = 1 << WIDTH\n"
+                             ") ();\n"
+                             "    parameter  int               P_A  = 8;\n"
+                             "    localparam logic [1:0] [7:0] LP_B = 16'h1234;\n"
+                             "    logic [7:0] sig_a;\n"
+                             "    logic       sig_b;\n"
+                             "endmodule\n")))))
+
+  ;; 4. Trailing inline comment alignment (`verilog-align-decl-expr-comments' and `verilog-align-comment-distance')
+  (with-temp-buffer
+    (let ((indent-tabs-mode nil)
+          (verilog-align-decl-dimension t)
+          (verilog-align-decl-sub-dimension t)
+          (verilog-align-decl-expr-comments t)
+          (verilog-align-comment-distance 3))
+      (verilog-mode)
+      (setq-local indent-tabs-mode nil)
+      (insert "    logic [3:0] [7:0] wide_bus; // Wide bus\n"
+              "    logic vld; // Valid flag\n")
+      (goto-char (point-min))
+      (electric-verilog-tab)
+      (should (equal (buffer-string)
+                     (concat "    logic [3:0] [7:0] wide_bus;   // Wide bus\n"
+                             "    logic             vld;        // Valid flag\n")))))
+  (with-temp-buffer
+    (let ((indent-tabs-mode nil)
+          (verilog-align-decl-dimension t)
+          (verilog-align-decl-sub-dimension t)
+          (verilog-align-decl-expr-comments nil))
+      (verilog-mode)
+      (setq-local indent-tabs-mode nil)
+      (insert "    logic [3:0] [7:0] wide_bus; // Wide bus\n"
+              "    logic vld; // Valid flag\n")
+      (goto-char (point-min))
+      (electric-verilog-tab)
+      (should (equal (buffer-string)
+                     (concat "    logic [3:0] [7:0] wide_bus; // Wide bus\n"
+                             "    logic             vld; // Valid flag\n")))))
+
+  ;; 5. Assignment block alignment honoring `verilog-auto-lineup', `verilog-align-assign-expr', and `verilog-pretty-expr'
+  ;; 5a. Default `verilog-auto-lineup' (`declarations') does not auto-align assignments, but `verilog-pretty-expr' does
+  (with-temp-buffer
+    (let ((indent-tabs-mode nil)
+          (verilog-indent-level 4)
+          (verilog-indent-level-module 4)
+          (verilog-indent-level-behavioral 4)
+          (verilog-align-decl-dimension t)
+          (verilog-auto-lineup 'declarations)
+          (verilog-auto-lineup-on-semi nil))
+      (verilog-mode)
+      (setq-local indent-tabs-mode nil)
+      (insert "module m;\n"
+              "    always_comb begin\n"
+              "        short_a = 1'b0;\n"
+              "        longer_sig_b = 1'b1;\n"
+              "    end\n"
+              "endmodule\n")
+      (indent-region (point-min) (point-max) nil)
+      ;; Not aligned by indent-region when verilog-auto-lineup is `declarations'
+      (should (string-match-p "short_a = 1'b0;" (buffer-string)))
+      ;; Explicit `verilog-pretty-expr' aligns the assignment block
+      (goto-char (point-min))
+      (search-forward "short_a")
+      (verilog-pretty-expr)
+      (should (string-match-p "short_a      = 1'b0;\n        longer_sig_b = 1'b1;" (buffer-string)))))
+
+  ;; 5b. `verilog-auto-lineup' = `assignments' aligns mixed `<=' and `=' and continuous `assign' (when `verilog-align-assign-expr' = t)
+  (with-temp-buffer
+    (let ((indent-tabs-mode nil)
+          (verilog-indent-level 4)
+          (verilog-indent-level-module 4)
+          (verilog-indent-level-behavioral 4)
+          (verilog-align-decl-dimension t)
+          (verilog-auto-lineup 'assignments)
+          (verilog-align-assign-expr t)
+          (verilog-auto-lineup-on-semi nil))
+      (verilog-mode)
+      (setq-local indent-tabs-mode nil)
+      (insert "module m;\n"
+              "    assign out_a = in_a;\n"
+              "    assign out_long_b = in_b;\n"
+              "    always_ff @(posedge clk) begin\n"
+              "        a_long_var <= b + c;\n"
+              "        d = e + f;\n"
+              "    end\n"
+              "endmodule\n")
+      (indent-region (point-min) (point-max) nil)
+      (should (equal (buffer-string)
+                     (concat "module m;\n"
+                             "    assign out_a      = in_a;\n"
+                             "    assign out_long_b = in_b;\n"
+                             "    always_ff @(posedge clk) begin\n"
+                             "        a_long_var <= b + c;\n"
+                             "        d           = e + f;\n"
+                             "    end\n"
+                             "endmodule\n"))))))
+
 (provide 'test-ts)
 ;;; test-ts.el ends here

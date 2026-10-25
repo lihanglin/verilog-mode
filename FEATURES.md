@@ -54,13 +54,13 @@ All 93 `defcustom` variables (84 option variables + 9 hook variables) and 5 `def
 | `verilog-auto-newline` | `t` | Non-nil automatically inserts a newline after typing semicolons (`;`). |
 | `verilog-auto-lineup-on-semi` | `t` | Non-nil means typing `;` runs the same declaration/block lineup as `<TAB>`; `nil` disables auto-lineup on `;` so only `<TAB>` triggers block alignment. |
 | `verilog-auto-indent-on-newline` | `t` | Non-nil automatically indents the line after `<RET>` / newline. |
-| `verilog-auto-lineup` | `'declarations` | Statements to line up across multiple lines: `'declarations`, `'assignments`, `'all`, or `nil`. |
-| `verilog-align-decl-dimension` | `nil` | Master switch for Tree-Sitter tabular alignment of ANSI ports, struct/union members, module instantiation ports, and declaration packed dimensions (`[dim0][dim1]` with no spaces between brackets when `verilog-align-decl-sub-dimension` is `nil`). |
+| `verilog-auto-lineup` | `'declarations` | Statements to line up across multiple lines: `'declarations`, `'assignments` (aligns procedural `=` / `<=` and, when `verilog-align-assign-expr` is non-nil, continuous `assign` blocks), `'all`, or `nil`. |
+| `verilog-align-decl-dimension` | `nil` | Master switch for Tree-Sitter tabular alignment of ANSI ports, `parameter` / `localparam` port lists and declaration blocks, `struct` / `union` / `enum` members, module instantiation ports, and declaration packed dimensions (`[dim0][dim1]` with no spaces between brackets when `verilog-align-decl-sub-dimension` is `nil`). |
 | `verilog-align-decl-sub-dimension` | `nil` | Non-nil aligns each packed sub-dimension into its own right-to-left sub-column (`[dim0] [dim1] ...`) when `verilog-align-decl-dimension` is also `t` (ignored when `verilog-align-decl-dimension` is `nil`). |
 | `verilog-align-ifelse` | `nil` | Non-nil aligns `else` under matching `if`; `nil` aligns with the first character on the line holding `if`. |
-| `verilog-align-decl-expr-comments` | `t` | Non-nil aligns trailing comments on declarations and expressions. |
+| `verilog-align-decl-expr-comments` | `t` | Non-nil aligns trailing inline comments (`// ...` and `/* ... */`) into a right-hand column across aligned declaration, port, instantiation, parameter, enum, and assignment blocks. |
 | `verilog-align-comment-distance` | `1` | Distance (in spaces) between longest declaration/expression and aligned trailing comments. |
-| `verilog-align-assign-expr` | `nil` | Non-nil aligns expressions of continuous `assign` statements. |
+| `verilog-align-assign-expr` | `nil` | Non-nil aligns expressions of continuous `assign` statements when aligning assignment blocks (`verilog-auto-lineup` set to `'assignments` or `'all`, or via `M-x verilog-pretty-expr`). |
 | `verilog-align-typedef-regexp` | `nil` | Regexp matching user-defined typedefs for declaration alignment (e.g., `"_t$"`). |
 | `verilog-align-typedef-words` | `nil` | List of literal type names matching user-defined typedefs for declaration alignment. |
 | `verilog-minimum-comment-distance` | `10` | Minimum distance (in lines) between `begin` and `end` required before auto-inserting an end-comment. |
@@ -83,6 +83,9 @@ All 93 `defcustom` variables (84 option variables + 9 hook variables) and 5 `def
 | `verilog-font-lock-uvm-face` | *(face)* | Face used for UVM class and type names (`uvm_*`) when `verilog-highlight-uvm` is non-nil (inherits from `font-lock-type-face`). |
 | `verilog-font-lock-p1800-face` | *(face)* | Face used for IEEE 1800 SystemVerilog keywords. |
 | `verilog-font-lock-ams-face` | *(face)* | Face used for Verilog-AMS keywords. |
+
+* Note
+ Currently in verilog-mode.el, lowercase uvm_* types use verilog-font-lock-uvm-face while uppercase UVM_* constants use font-lock-constant-face.
 
 ### 5.3 Library & Submodule Search Paths (`verilog-mode-auto`)
 

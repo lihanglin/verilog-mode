@@ -4151,6 +4151,8 @@ Key bindings specific to `verilog-mode-map' are:
   (set-syntax-table verilog-mode-syntax-table)
   (set (make-local-variable 'indent-line-function)
        #'verilog-indent-line-relative)
+  (set (make-local-variable 'indent-region-function)
+       #'verilog-indent-region)
   (set (make-local-variable 'editorconfig-indent-size-vars)
        '(verilog-indent-level
          verilog-indent-level-behavioral
@@ -4308,6 +4310,15 @@ With optional ARG, remove existing end of line comments."
   (interactive)
   (electric-verilog-terminate-line 1))
 
+(defvar verilog--in-indent-region nil
+  "Non-nil when executing inside `verilog-indent-region'.")
+
+(defvar verilog--in-align-gap nil
+  "Non-nil when indenting intermediate comment/directive lines inside an aligned block.")
+
+(defvar verilog--last-aligned-block-end nil
+  "Buffer position at the end of the last block aligned during `verilog-indent-region'.")
+
 (defun verilog-align-block-at-point (&optional pos)
   "Perform AST-driven tabular alignment of block or declaration group at POS."
   (interactive)
@@ -4316,18 +4327,68 @@ With optional ARG, remove existing end of line comments."
                 verilog-align-decl-dimension
                 (and verilog-align-decl-dimension
                      verilog-align-decl-sub-dimension)
-                verilog-indent-level)))
+                verilog-indent-level
+                verilog-align-decl-expr-comments
+                verilog-align-comment-distance
+                verilog-auto-lineup
+                verilog-align-assign-expr)))
     (when edits
-      (save-excursion
-        (dolist (edit (reverse edits))
-          (let ((beg (nth 0 edit))
-                (end (nth 1 edit))
-                (new-str (nth 2 edit)))
-            (unless (string= (buffer-substring-no-properties beg end) new-str)
-              (goto-char beg)
-              (insert new-str)
-              (delete-region (point) (+ (point) (- end beg)))))))
-      t)))
+      (let ((min-beg (nth 0 (car edits)))
+            (block-end-mk (copy-marker (nth 1 (car (last edits))) t))
+            (next-beg nil)
+            (gaps nil))
+        (save-excursion
+          (dolist (edit (reverse edits))
+            (let ((beg (nth 0 edit))
+                  (end (nth 1 edit))
+                  (new-str (nth 2 edit)))
+              (when (and verilog--in-indent-region
+                         next-beg
+                         (> next-beg (1+ end)))
+                (push (cons (copy-marker (1+ end))
+                            (copy-marker next-beg))
+                      gaps))
+              (unless (string= (buffer-substring-no-properties beg end) new-str)
+                (goto-char beg)
+                (insert new-str)
+                (delete-region (point) (+ (point) (- end beg))))
+              (setq next-beg beg)))
+          (when gaps
+            (let ((verilog--in-align-gap t))
+              (dolist (gap gaps)
+                (let ((g-beg (car gap))
+                      (g-end (cdr gap)))
+                  (goto-char g-beg)
+                  (while (< (point) g-end)
+                    (unless (and (bolp) (eolp))
+                      (verilog-indent-line-relative))
+                    (forward-line 1))
+                  (set-marker g-beg nil)
+                  (set-marker g-end nil))))))
+        (let ((max-end (marker-position block-end-mk)))
+          (set-marker block-end-mk nil)
+          (when verilog--in-indent-region
+            (setq verilog--last-aligned-block-end max-end))
+          (cons min-beg max-end))))))
+
+(defun verilog-indent-region (start end)
+  "Indent region from START to END, aligning each block at most once."
+  (save-excursion
+    (let ((end-mk (copy-marker end))
+          (verilog--in-indent-region t)
+          (verilog--last-aligned-block-end nil))
+      (goto-char start)
+      (while (< (point) end-mk)
+        (setq verilog--last-aligned-block-end nil)
+        (unless (and (bolp) (eolp))
+          (verilog-indent-line-relative))
+        (if (and verilog--last-aligned-block-end
+                 (> verilog--last-aligned-block-end (point)))
+            (progn
+              (goto-char verilog--last-aligned-block-end)
+              (forward-line 1))
+          (forward-line 1)))
+      (set-marker end-mk nil))))
 
 (defun electric-verilog-semi ()
   "Insert `;' character and reindent the line."
@@ -4402,16 +4463,7 @@ With optional ARG, remove existing end of line comments."
    ;; The region is active, indent it.
    ((and (region-active-p)
 	 (not (eq (region-beginning) (region-end))))
-    (indent-region (region-beginning) (region-end) nil)
-    (when (or verilog-align-decl-dimension
-              (not verilog-auto-lineup-on-semi))
-      (save-excursion
-        (let ((end-mk (copy-marker (region-end))))
-          (goto-char (region-beginning))
-          (while (< (point) end-mk)
-            (verilog-align-block-at-point)
-            (forward-line 1))
-          (set-marker end-mk nil)))))
+    (indent-region (region-beginning) (region-end) nil))
    ((or verilog-tab-always-indent
 	(save-excursion
 	  (skip-chars-backward " \t")
@@ -7107,10 +7159,14 @@ Only look at a few lines to determine indent level."
      (; handle indentation ignoring
       (verilog-indent-ignore-p)
       nil)
-     ((and verilog-auto-lineup
-           (or verilog-align-decl-dimension
-               (not verilog-auto-lineup-on-semi))
-           (verilog-align-block-at-point))
+     ((and (not verilog--in-align-gap)
+           verilog-auto-lineup
+           (if (or verilog-align-decl-dimension
+                   (not verilog-auto-lineup-on-semi))
+               (verilog-align-block-at-point)
+             (and (memq verilog-auto-lineup '(all assignments))
+                  (let ((verilog-auto-lineup 'assignments))
+                    (verilog-align-block-at-point)))))
       nil)
      (; handle continued exp
       (eq type 'cexp)
@@ -7424,8 +7480,11 @@ _ARG is ignored, for `comment-indent-function' compatibility."
 
 (defun verilog-pretty-declarations-auto (&optional quiet)
   "Call `verilog-pretty-declarations' QUIET based on `verilog-auto-lineup'."
-  (when (or (eq 'all verilog-auto-lineup)
-	    (eq 'declarations verilog-auto-lineup))
+  (when (and (not verilog--in-align-gap)
+             (not verilog-align-decl-dimension)
+             verilog-auto-lineup-on-semi
+             (or (eq 'all verilog-auto-lineup)
+                 (eq 'declarations verilog-auto-lineup)))
     (verilog-pretty-declarations quiet)))
 
 (defun verilog--pretty-declarations-find-end (&optional reg-end)
@@ -7691,7 +7750,12 @@ If QUIET is non-nil, do not print messages showing the progress of line-up."
         (setq rstart (region-beginning))
         (setq rend (region-end))
         (goto-char rstart))
-      (unless (verilog-in-comment-or-string-p)
+      (unless (or (verilog-in-comment-or-string-p)
+                  (and (not (region-active-p))
+                       (or verilog-align-decl-dimension
+                           (not verilog-auto-lineup-on-semi))
+                       (let ((verilog-auto-lineup 'assignments))
+                         (verilog-align-block-at-point))))
         (beginning-of-line)
         (when (and (verilog--pretty-expr-assignment-found discard-re)
                    (save-excursion
