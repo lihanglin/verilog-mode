@@ -662,5 +662,121 @@
                                "    endfunction\n"
                                "endmodule\n")))))))
 
+(ert-deftest verilog-ts-test-09-highlight-uvm ()
+  "Verify `verilog-highlight-uvm' option and font-lock rules."
+  (should (eq (default-value 'verilog-highlight-uvm) nil))
+  (let ((sample-uvm
+         (concat "class uvm_my_sb extends uvm_scoreboard;\n"
+                 "  `uvm_component_utils(uvm_my_sb)\n"
+                 "  uvm_event m_ev;\n"
+                 "  rand uvm_sequence_item req;\n"
+                 "  virtual uvm_sequencer #(my_item) sqr;\n"
+                 "  int uvm_cnt;\n"
+                 "  function void build_phase(uvm_phase phase);\n"
+                 "    uvm_config_db#(int)::get(this, \"\", \"cnt\", uvm_cnt);\n"
+                 "  endfunction\n"
+                 "  task run_phase(input uvm_phase phase, uvm_domain dom);\n"
+                 "    `uvm_info(\"SB\", \"running\", UVM_LOW)\n"
+                 "    uvm_report_info(\"SB\", \"done\", UVM_MEDIUM);\n"
+                 "  endtask\n"
+                 "endclass\n")))
+    ;; 1. Default (`verilog-highlight-uvm' = nil)
+    (with-temp-buffer
+      (let ((verilog-highlight-uvm nil))
+        (verilog-mode)
+        (insert sample-uvm)
+        (font-lock-mode 1)
+        (font-lock-ensure)
+        (goto-char (point-min))
+        (search-forward "uvm_scoreboard")
+        (should-not (eq (get-text-property (match-beginning 0) 'face)
+                        'verilog-font-lock-uvm-face))
+        (search-forward "UVM_LOW")
+        (should-not (eq (get-text-property (match-beginning 0) 'face)
+                        'font-lock-constant-face))))
+    ;; 2. Enabled (`verilog-highlight-uvm' = t)
+    (with-temp-buffer
+      (let ((verilog-highlight-uvm t))
+        (verilog-mode)
+        (insert sample-uvm)
+        (font-lock-mode 1)
+        (font-lock-ensure)
+        ;; `class uvm_my_sb extends uvm_scoreboard;'
+        (goto-char (point-min))
+        (search-forward "uvm_my_sb")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'font-lock-function-name-face))
+        (search-forward "uvm_scoreboard")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'verilog-font-lock-uvm-face))
+        ;; ``uvm_component_utils' macro keeps preprocessor face
+        (search-forward "`uvm_component_utils")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'font-lock-preprocessor-face))
+        ;; `uvm_event m_ev;'
+        (search-forward "uvm_event")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'verilog-font-lock-uvm-face))
+        (search-forward "m_ev")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'font-lock-variable-name-face))
+        ;; `rand uvm_sequence_item req;'
+        (search-forward "uvm_sequence_item")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'verilog-font-lock-uvm-face))
+        (search-forward "req")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'font-lock-variable-name-face))
+        ;; `virtual uvm_sequencer #(my_item) sqr;'
+        (search-forward "uvm_sequencer")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'verilog-font-lock-uvm-face))
+        (search-forward "sqr")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'font-lock-variable-name-face))
+        ;; `int uvm_cnt;' keeps variable face
+        (search-forward "uvm_cnt")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'font-lock-variable-name-face))
+        ;; `function void build_phase(uvm_phase phase);'
+        (search-forward "uvm_phase")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'verilog-font-lock-uvm-face))
+        (search-forward "phase")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'font-lock-variable-name-face))
+        ;; `uvm_config_db#(int)::get'
+        (search-forward "uvm_config_db")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'verilog-font-lock-uvm-face))
+        ;; `task run_phase(input uvm_phase phase, uvm_domain domain);'
+        (search-forward "input ")
+        (search-forward "uvm_phase")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'verilog-font-lock-uvm-face))
+        (search-forward "phase")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'font-lock-variable-name-face))
+        (search-forward "uvm_domain")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'verilog-font-lock-uvm-face))
+        (search-forward "dom")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'font-lock-variable-name-face))
+        ;; ``uvm_info' and `UVM_LOW'
+        (search-forward "`uvm_info")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'font-lock-preprocessor-face))
+        (search-forward "UVM_LOW")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'font-lock-constant-face))
+        ;; `uvm_report_info("SB", "done", UVM_MEDIUM);'
+        (search-forward "uvm_report_info")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'font-lock-function-name-face))
+        (search-forward "UVM_MEDIUM")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'font-lock-constant-face))))))
+
 (provide 'test-ts)
 ;;; test-ts.el ends here

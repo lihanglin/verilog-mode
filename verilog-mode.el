@@ -710,6 +710,20 @@ file referenced.  If false, this is not supported."
   :type 'boolean)
 (put 'verilog-highlight-includes 'safe-local-variable #'verilog-booleanp)
 
+(defcustom verilog-highlight-uvm nil
+  "Non-nil means highlight UVM class names (`uvm_*') and constants (`UVM_*')."
+  :group 'verilog-mode-indent
+  :type 'boolean
+  :set (lambda (sym val)
+         (set-default sym val)
+         (dolist (buf (buffer-list))
+           (with-current-buffer buf
+             (when (and (derived-mode-p 'verilog-mode)
+                        (bound-and-true-p font-lock-mode)
+                        (fboundp 'font-lock-flush))
+               (font-lock-flush))))))
+(put 'verilog-highlight-uvm 'safe-local-variable #'verilog-booleanp)
+
 (defcustom verilog-highlight-max-lookahead 10000
   "Maximum size of declaration statement that undergoes highlighting.
 Highlighting is performed only on the first `verilog-highlight-max-lookahead'
@@ -3093,6 +3107,14 @@ See also `verilog-font-lock-extra-types'.")
   "Font lock mode face used to highlight verilog grouping keywords."
   :group 'font-lock-highlighting-faces)
 
+(defvar verilog-font-lock-uvm-face
+  'verilog-font-lock-uvm-face
+  "Font to use for UVM class and type names.")
+(defface verilog-font-lock-uvm-face
+  '((t (:inherit font-lock-type-face)))
+  "Font lock mode face used to highlight UVM class and type names."
+  :group 'font-lock-highlighting-faces)
+
 (let* ((verilog-type-font-keywords
         (eval-when-compile
           (verilog-regexp-opt
@@ -3256,6 +3278,16 @@ See also `verilog-font-lock-extra-types'.")
        0 font-lock-type-face append)
 		 ;; Fontify instantiation names
 		 '("\\([A-Za-z][A-Za-z0-9_]*\\)\\s-*(" 1 font-lock-function-name-face)
+		 ;; Fontify UVM declarations, class/type names, and constants when `verilog-highlight-uvm' is enabled
+		 (list
+		  'verilog-match-uvm-declaration
+		  (list
+		   'verilog-declaration-varname-matcher
+		   '(verilog-single-declaration-end verilog-highlight-max-lookahead)
+		   nil
+		   '(0 font-lock-variable-name-face)))
+		 '(verilog-match-uvm-type (0 verilog-font-lock-uvm-face))
+		 '(verilog-match-uvm-constant (0 font-lock-constant-face))
 		 )))
 
   (setq verilog-font-lock-keywords-3
@@ -3455,6 +3487,74 @@ inserted using a single call to `verilog-insert'."
 (defun verilog-declaration-end ()
   (search-forward ";" nil t))
 
+(defun verilog-uvm-skip-type-and-spec (limit)
+  "If point is at a `uvm_*' type in a declaration, return start pos of variable name."
+  (save-excursion
+    (save-match-data
+      (when (and (< (point) limit)
+                 (looking-at "\\<uvm_[a-zA-Z0-9_]+\\>")
+                 (not (verilog-inside-comment-or-string-p))
+                 (not (save-excursion
+                        (skip-chars-backward " \t\n\r\f")
+                        (and (>= (- (point) 7) (point-min))
+                             (string= (buffer-substring-no-properties (- (point) 7) (point))
+                                      "typedef")
+                             (save-excursion
+                               (backward-char 7)
+                               (looking-at "\\<typedef\\>"))))))
+        (goto-char (match-end 0))
+        (verilog-forward-ws&directives limit)
+        ;; Optional parameter specialization #( ... )
+        (when (and (< (point) limit) (eq (char-after) ?#))
+          (forward-char 1)
+          (verilog-forward-ws&directives limit)
+          (when (and (< (point) limit) (eq (char-after) ?\())
+            (ignore-errors (forward-sexp 1))
+            (verilog-forward-ws&directives limit)))
+        ;; Optional packed dimensions [ ... ]
+        (while (and (< (point) limit) (eq (char-after) ?\[))
+          (let ((before (point)))
+            (ignore-errors (forward-sexp 1))
+            (if (> (point) before)
+                (verilog-forward-ws&directives limit)
+              (goto-char limit))))
+        ;; Must now be at a valid variable identifier (not a keyword, not followed by `(' or `::')
+        (when (and (< (point) limit)
+                   (looking-at verilog-identifier-sym-re)
+                   (not (member (match-string-no-properties 0) verilog-keywords)))
+          (let ((var-pos (match-beginning 0))
+                (var-end (match-end 0)))
+            (goto-char var-end)
+            (verilog-forward-ws&directives limit)
+            (unless (or (eq (char-after) ?\()
+                        (looking-at "::"))
+              var-pos)))))))
+
+(defun verilog-match-uvm-declaration (limit)
+  "Anchor matcher for UVM variable/port declarations when `verilog-highlight-uvm' is non-nil."
+  (when verilog-highlight-uvm
+    (let (found var-pos)
+      (while (and (not found)
+                  (< (point) limit)
+                  (re-search-forward "\\<uvm_[a-zA-Z0-9_]+\\>" limit t))
+        (save-excursion
+          (goto-char (match-beginning 0))
+          (setq var-pos (verilog-uvm-skip-type-and-spec limit)))
+        (when var-pos
+          (goto-char var-pos)
+          (setq found t)))
+      found)))
+
+(defun verilog-match-uvm-type (limit)
+  "Match UVM class/type identifiers (`uvm_*') up to LIMIT when `verilog-highlight-uvm' is non-nil."
+  (when verilog-highlight-uvm
+    (re-search-forward "\\<uvm_[a-zA-Z0-9_]+\\>" limit t)))
+
+(defun verilog-match-uvm-constant (limit)
+  "Match UVM uppercase constants/enums (`UVM_*') up to LIMIT when `verilog-highlight-uvm' is non-nil."
+  (when verilog-highlight-uvm
+    (re-search-forward "\\<UVM_[A-Z0-9_]+\\>" limit t)))
+
 (defun verilog-single-declaration-end (limit)
   "Return pos where current (single) declaration statement ends.
 Also, this function moves POINT forward to the start of a variable name
@@ -3470,7 +3570,7 @@ Meaning of *single* declaration:
 and `output [1:0] y' is the other single declaration.  In the 1st single
 declaration, POINT is moved to start of `clk'.  And in the 2nd declaration,
 POINT is moved to `y'."
-  (let (maxpoint old-point)
+  (let (maxpoint old-point uvm-var-pos)
     ;; maxpoint = min(curr-point + limit, buffer-size)
     (setq maxpoint (if (eq limit 0)
                        (point-max) ;; no bounds if search-bound is zero
@@ -3482,6 +3582,9 @@ POINT is moved to `y'."
     (when (eq (char-after) ?\[)
       (re-search-forward verilog-range-re maxpoint t))
     (verilog-forward-ws&directives maxpoint)
+    (when (and verilog-highlight-uvm
+               (setq uvm-var-pos (verilog-uvm-skip-type-and-spec maxpoint)))
+      (goto-char uvm-var-pos))
 
     ;; Move forward until a delimiter is reached which marks end of current
     ;; single declaration. Return point at found delimiter
@@ -3490,7 +3593,9 @@ POINT is moved to `y'."
                   (not (eq old-point (point)))
                   (not (eq (char-after) ?\; ))
                   (not (eq (char-after) ?\) ))
-                  (not (looking-at (verilog-get-declaration-re))))
+                  (not (looking-at (verilog-get-declaration-re)))
+                  (not (and verilog-highlight-uvm
+                            (verilog-uvm-skip-type-and-spec maxpoint))))
         (setq old-point (point))
         (ignore-errors
           (forward-sexp)
@@ -15506,6 +15611,7 @@ Files are checked based on `verilog-library-flags'."
        verilog-highlight-includes
        verilog-highlight-modules
        verilog-highlight-translate-off
+       verilog-highlight-uvm
        verilog-indent-begin-after-if
        verilog-indent-class-inside-pkg
        verilog-indent-declaration-macros

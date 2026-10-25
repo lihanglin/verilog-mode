@@ -25,11 +25,12 @@ New features settings
 (setq verilog-align-decl-sub-dimension nil)
 (setq verilog-auto-newline nil)
 (setq verilog-auto-lineup-on-semi nil)
+(setq verilog-highlight-uvm nil)
 ```
 
 ## 5. Complete Reference of Configurable Settings
 
-All 92 `defcustom` variables (83 option variables + 9 hook variables) and 4 `defface` faces from `verilog-mode` are preserved and can be configured via `(setq ...)` in `~/.emacs` / `~/.emacs.d/init.el`, interactively via `M-x customize-group RET verilog-mode`, or per-file via `// Local Variables:` at the bottom of a Verilog/SystemVerilog file.
+All 93 `defcustom` variables (84 option variables + 9 hook variables) and 5 `defface` faces from `verilog-mode` are preserved and can be configured via `(setq ...)` in `~/.emacs` / `~/.emacs.d/init.el`, interactively via `M-x customize-group RET verilog-mode`, or per-file via `// Local Variables:` at the bottom of a Verilog/SystemVerilog file.
 
 ### 5.1 Indentation & `<TAB>` Alignment (`verilog-mode-indent`)
 
@@ -74,10 +75,12 @@ All 92 `defcustom` variables (83 option variables + 9 hook variables) and 4 `def
 | `verilog-highlight-grouping-keywords` | `nil` | Non-nil highlights structural grouping keywords (`begin`..`end`, `case`..`endcase`, `module`..`endmodule`) using `verilog-font-lock-grouping-keywords-face`. |
 | `verilog-highlight-includes` | `t` | Non-nil highlights `` `include `` filenames for mouse/RET navigation (`verilog-load-file-at-point`). |
 | `verilog-highlight-modules` | `nil` | Non-nil highlights submodule instantiations for mouse/RET navigation (`verilog-load-file-at-point`). |
+| `verilog-highlight-uvm` | `nil` | Non-nil highlights UVM class/type names (`uvm_*`) using `verilog-font-lock-uvm-face`, UVM constants/enums (`UVM_*`) using `font-lock-constant-face`, and variable names declared with `uvm_*` types. |
 | `verilog-highlight-max-lookahead` | `10000` | Maximum character lookahead in a declaration statement for variable fontification (`0` = unlimited). |
 | `verilog-highlight-p1800-keywords` | `nil` | Obsolete (all files are highlighted with full SystemVerilog IEEE 1800 support). |
 | `verilog-font-lock-translate-off-face` | *(face)* | Face used for `translate_off` regions when `verilog-highlight-translate-off` is non-nil. |
 | `verilog-font-lock-grouping-keywords-face` | *(face)* | Face used for grouping keywords when `verilog-highlight-grouping-keywords` is non-nil. |
+| `verilog-font-lock-uvm-face` | *(face)* | Face used for UVM class and type names (`uvm_*`) when `verilog-highlight-uvm` is non-nil (inherits from `font-lock-type-face`). |
 | `verilog-font-lock-p1800-face` | *(face)* | Face used for IEEE 1800 SystemVerilog keywords. |
 | `verilog-font-lock-ams-face` | *(face)* | Face used for Verilog-AMS keywords. |
 
